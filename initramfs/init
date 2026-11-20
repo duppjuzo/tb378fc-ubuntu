@@ -130,13 +130,13 @@ if [ -x /bin/busybox ]; then
         ln -sf busybox "/run/initramfs/bin/$app"
     done
 fi
-if [ -x /bin/shutdown ]; then
-    cp /bin/shutdown /run/initramfs/shutdown
-    chmod 0755 /run/initramfs/shutdown
-elif [ -x /bin/persistent-shutdown80 ]; then
-    cp /bin/persistent-shutdown80 /run/initramfs/shutdown
-    chmod 0755 /run/initramfs/shutdown
-fi
+for shutdown_bin in /bin/tb378fc-shutdown /bin/shutdown /bin/persistent-shutdown80; do
+    if [ -x "$shutdown_bin" ]; then
+        cp "$shutdown_bin" /run/initramfs/shutdown
+        chmod 0755 /run/initramfs/shutdown
+        break
+    fi
+done
 
 echo "TB378FC_ROOT_READY spec=$root_spec device=$volume" | tee /run/evidence/root-stage.txt
 cat /proc/mounts >/run/evidence/persistent-mounts.txt

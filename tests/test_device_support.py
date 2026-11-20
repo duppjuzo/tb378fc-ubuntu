@@ -90,6 +90,17 @@ class TestGpuMonitorSysfs(unittest.TestCase):
 
 
 class TestInitramfsAndPackaging(unittest.TestCase):
+    def test_initramfs_stages_tb378fc_shutdown(self):
+        init_text = (ROOT / 'initramfs/init').read_text(encoding='utf-8')
+        builder_text = (ROOT / 'tools/build-initramfs.sh').read_text(encoding='utf-8')
+        self.assertIn('/bin/tb378fc-shutdown', builder_text)
+        self.assertIn('/bin/tb378fc-shutdown', init_text)
+
+    def test_tb378fc_vulkan_prefers_private_mesa_prefix(self):
+        vk_text = (ROOT / 'packaging/device-support/tree/usr/local/bin/tb378fc-vulkan').read_text(encoding='utf-8')
+        self.assertIn('/usr/lib/tb378fc/mesa/share/vulkan/icd.d/freedreno_icd.aarch64.json', vk_text)
+        self.assertIn('/usr/lib/tb378fc/turnip/share/vulkan/icd.d/freedreno_icd.aarch64.json', vk_text)
+
     def test_initramfs_gates_debug_services(self):
         init_text = (ROOT / 'initramfs/init').read_text(encoding='utf-8')
         self.assertIn('tb378fc.debug=1', init_text)
