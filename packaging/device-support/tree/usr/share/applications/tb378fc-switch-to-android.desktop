@@ -1,8 +1,9 @@
 [Desktop Entry]
 Type=Application
-Name=Switch to ColorOS
-Name[zh_CN]=切换到 ColorOS
-Comment=Save your work before switching and rebooting
+Name=Switch to Android
+Name[zh_CN]=切换到 Android
+Comment=Save your work before switching and rebooting into Android
+Comment[zh_CN]=保存工作后切换并重启进入 Android
 Exec=pkexec /usr/local/sbin/tb378fc-switch to-android
 Icon=system-reboot
 Terminal=false

@@ -1,4 +1,4 @@
-# Ubuntu / ColorOS 同槽切换器
+# Ubuntu / Android 同槽切换器
 
 由一加项目固定提交`adc57231281ac5bc8eb8ee012ffb04663e9f8226`的`erhai-switch`改编，沿用GPL-2.0-only许可与完整三件套读回校验。
 

@@ -1,0 +1,13 @@
+[Unit]
+Description=TB378FC Bluetooth local public address setup
+After=local-fs.target systemd-udev-trigger.service
+Before=bluetooth.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /usr/local/libexec/tb378fc-bluetooth-address.py
+RemainAfterExit=yes
+TimeoutStartSec=30
+
+[Install]
+WantedBy=multi-user.target

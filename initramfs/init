@@ -1,6 +1,9 @@
 #!/bin/sh
-# Early storage support for the dedicated tb378fc-root79 volume.
-export PATH=/bin
+# SPDX-License-Identifier: GPL-2.0-only
+# Early boot initramfs for Lenovo Xiaoxin Pad Pro GT 13 (TB378FC).
+# USB gadget diagnostics and HTTP log server stay disabled unless
+# kernel cmdline explicitly passes tb378fc.debug=1.
+export PATH=/bin:/sbin:/usr/bin:/usr/sbin
 mount -t proc proc /proc
 mount -t sysfs sysfs /sys
 mount -t devtmpfs devtmpfs /dev
@@ -9,74 +12,143 @@ mount -t devpts devpts /dev/pts
 mount -t tmpfs -o size=6G,mode=0755 tmpfs /run
 mkdir -p /run/evidence
 exec </dev/console >/dev/console 2>&1
-cat /etc/build-id >/run/evidence/build-id.txt
-cat /proc/cmdline >/run/evidence/cmdline.txt
+
+[ -r /etc/build-id ] && cat /etc/build-id >/run/evidence/build-id.txt
+cmdline=$(cat /proc/cmdline)
+printf '%s\n' "$cmdline" >/run/evidence/cmdline.txt
+
+# Bring any offline CPUs online if booted with a restricted maxcpus setting.
 for cpu in 1 2 3 4 5 6 7; do
-    [ ! -f /sys/devices/system/cpu/cpu$cpu/online ] || echo 1 >/sys/devices/system/cpu/cpu$cpu/online
+    if [ -w "/sys/devices/system/cpu/cpu$cpu/online" ] && \
+       [ "$(cat "/sys/devices/system/cpu/cpu$cpu/online" 2>/dev/null || echo 1)" = "0" ]; then
+        echo 1 >"/sys/devices/system/cpu/cpu$cpu/online" || true
+    fi
 done
+
 setup=0
-case " $(cat /proc/cmdline) " in
-    *" tb378fc.setup=1 "*) setup=1 ;;
-esac
+debug=0
+root_spec=
+for token in $cmdline; do
+    case "$token" in
+        tb378fc.setup=1) setup=1 ;;
+        tb378fc.debug=1) debug=1 ;;
+        tb378fc.root=*) root_spec=${token#tb378fc.root=} ;;
+    esac
+done
+
+start_debug_channel() {
+    [ "$debug" = "1" ] || return 0
+    if [ -x /bin/usb-diag ]; then
+        /bin/usb-diag >/run/evidence/usb-setup.txt 2>&1 &
+    fi
+    if command -v httpd >/dev/null 2>&1; then
+        httpd -p 8081 -h /run/evidence
+    fi
+}
+
 fail() {
-    echo "TB378FC_ROOT79_FAILED $*" | tee /run/evidence/root-stage.txt
-    dmesg >/run/evidence/dmesg.txt
-    /bin/usb-diag >/run/evidence/usb-setup.txt 2>&1 &
-    httpd -p 8081 -h /run/evidence
-    sleep 90
-    /bin/reboot-bootloader
+    echo "TB378FC_INIT_FAILED $*" | tee /run/evidence/root-stage.txt
+    dmesg >/run/evidence/dmesg.txt 2>&1 || true
+    if [ "$debug" = "1" ]; then
+        start_debug_channel
+        sleep 90
+    else
+        sleep 5
+    fi
+    if [ -x /bin/reboot-bootloader ]; then
+        /bin/reboot-bootloader
+    else
+        reboot -f
+    fi
     while :; do sleep 1; done
 }
-if [ "$setup" = 0 ] && [ -c /dev/watchdog0 ]; then
+
+if [ "$setup" = "0" ] && [ -c /dev/watchdog0 ]; then
     watchdog -F -T 30 -t 5 /dev/watchdog0 &
 fi
-echo TB378FC_ROOT79_EARLY_MODULES >/dev/kmsg
-while read -r module; do
-    [ -z "$module" ] || insmod "/lib/modules/$module" >>/run/evidence/early-modules.txt 2>&1 || fail "module:$module"
-done </etc/early-modules
+
+# Unified v7.4 kernels build UFS/ext4/squashfs/overlay in; keep optional module list for tests.
+if [ -s /etc/early-modules ]; then
+    echo TB378FC_EARLY_MODULES >/dev/kmsg
+    while IFS= read -r module; do
+        case "$module" in
+            ""|\#*) continue ;;
+        esac
+        insmod "/lib/modules/$module" >>/run/evidence/early-modules.txt 2>&1 || fail "module:$module"
+    done </etc/early-modules
+fi
 cat /proc/uptime >/run/evidence/storage-probe-uptime.txt
-if [ "$setup" = 1 ]; then
-    # Same early drivers as the persistent path; keep all tablet partitions
-    # unmounted and continue into the established full-RAM installation desk.
+
+if [ "$setup" = "1" ]; then
+    start_debug_channel
     export TB378FC_PREPARED=1
-    exec /bin/desktop-init79
+    if [ -x /bin/desktop-init ]; then
+        exec /bin/desktop-init
+    elif [ -x /bin/desktop-init79 ]; then
+        exec /bin/desktop-init79
+    fi
     fail setup-exec
 fi
-/bin/usb-diag >/run/evidence/usb-setup.txt 2>&1 &
-httpd -p 8081 -h /run/evidence
-echo TB378FC_ROOT79_FIND_VOLUME | tee /run/evidence/root-stage.txt
-expected=$(cat /etc/root-uuid)
+
+start_debug_channel
+
+echo TB378FC_FIND_ROOT_VOLUME | tee /run/evidence/root-stage.txt
+if [ -z "$root_spec" ] && [ -r /etc/root-uuid ]; then
+    expected=$(cat /etc/root-uuid)
+    [ -n "$expected" ] && root_spec="UUID=$expected"
+fi
+[ -n "$root_spec" ] || root_spec="PARTLABEL=linux_rootfs"
+
 volume=
-for count in $(seq 1 60); do
-    volume=$(findfs "UUID=$expected" 2>/dev/null) && break
+for _ in $(seq 1 60); do
+    volume=$(findfs "$root_spec" 2>/dev/null) && [ -n "$volume" ] && break
     sleep 1
 done
-[ -n "$volume" ] || fail missing-root-volume
+[ -n "$volume" ] || fail "missing-root-volume:$root_spec"
+
 mkdir -p /run/tb378fc-root /run/desktop/minimal /run/desktop/standard /newroot
 mount -t ext4 -o rw,noatime "$volume" /run/tb378fc-root || fail root-mount
-[ "$(cat /run/tb378fc-root/.tb378fc-root)" = tb378fc-root79 ] || fail root-layout
-mount -t squashfs -o ro,loop /run/tb378fc-root/layers/minimal.squashfs /run/desktop/minimal || fail minimal
-mount -t squashfs -o ro,loop /run/tb378fc-root/layers/minimal.standard.squashfs /run/desktop/standard || fail standard
-mount -t overlay overlay -o lowerdir=/run/desktop/standard:/run/desktop/minimal,upperdir=/run/tb378fc-root/upper,workdir=/run/tb378fc-root/work /newroot || fail overlay
-cp /etc/build-id /newroot/etc/tb378fc-build-id
+
+if [ -f /run/tb378fc-root/.tb378fc-root ] && \
+   [ -f /run/tb378fc-root/layers/minimal.squashfs ] && \
+   [ -f /run/tb378fc-root/layers/minimal.standard.squashfs ]; then
+    mount -t squashfs -o ro,loop /run/tb378fc-root/layers/minimal.squashfs /run/desktop/minimal || fail minimal
+    mount -t squashfs -o ro,loop /run/tb378fc-root/layers/minimal.standard.squashfs /run/desktop/standard || fail standard
+    mount -t overlay overlay \
+        -o lowerdir=/run/desktop/standard:/run/desktop/minimal,upperdir=/run/tb378fc-root/upper,workdir=/run/tb378fc-root/work \
+        /newroot || fail overlay
+else
+    # Direct ext4 rootfs layout (no overlay layers)
+    mount --move /run/tb378fc-root /newroot || fail direct-root-move
+fi
+
+[ -r /etc/build-id ] && cp /etc/build-id /newroot/etc/tb378fc-build-id
 mkdir -p /run/initramfs/bin /run/initramfs/dev /run/initramfs/proc /run/initramfs/sys /run/initramfs/run
-cp /bin/busybox /run/initramfs/bin/busybox
-for app in sh mount umount sync losetup reboot poweroff halt sleep; do
-    ln -s busybox "/run/initramfs/bin/$app"
-done
-cp /bin/persistent-shutdown80 /run/initramfs/shutdown
-chmod 0755 /run/initramfs/shutdown
-echo "TB378FC_ROOT79_READY uuid=$expected device=$volume" | tee /run/evidence/root-stage.txt
+if [ -x /bin/busybox ]; then
+    cp /bin/busybox /run/initramfs/bin/busybox
+    for app in sh mount umount sync losetup reboot poweroff halt sleep; do
+        ln -sf busybox "/run/initramfs/bin/$app"
+    done
+fi
+if [ -x /bin/shutdown ]; then
+    cp /bin/shutdown /run/initramfs/shutdown
+    chmod 0755 /run/initramfs/shutdown
+elif [ -x /bin/persistent-shutdown80 ]; then
+    cp /bin/persistent-shutdown80 /run/initramfs/shutdown
+    chmod 0755 /run/initramfs/shutdown
+fi
+
+echo "TB378FC_ROOT_READY spec=$root_spec device=$volume" | tee /run/evidence/root-stage.txt
 cat /proc/mounts >/run/evidence/persistent-mounts.txt
 mkdir -p /newroot/run /newroot/dev /newroot/proc /newroot/sys
 for process in /proc/[0-9]*; do
     pid=${process##*/}
-    [ "$pid" = 1 ] || [ ! -e "$process/exe" ] || kill "$pid" 2>/dev/null
+    [ "$pid" = 1 ] || [ ! -e "$process/exe" ] || kill "$pid" 2>/dev/null || true
 done
 sleep 1
 for process in /proc/[0-9]*; do
     pid=${process##*/}
-    [ "$pid" = 1 ] || [ ! -e "$process/exe" ] || kill -KILL "$pid" 2>/dev/null
+    [ "$pid" = 1 ] || [ ! -e "$process/exe" ] || kill -KILL "$pid" 2>/dev/null || true
 done
 mount --move /dev /newroot/dev || fail move-dev
 mount --move /proc /newroot/proc || fail move-proc

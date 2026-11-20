@@ -1,7 +1,7 @@
 #!/bin/sh
 # SPDX-License-Identifier: GPL-2.0-only
 #
-# tb378fc-switch -- same-slot Ubuntu / ColorOS triplet switcher for the configured tablet.
+# tb378fc-switch -- same-slot Ubuntu / Android triplet switcher for the configured tablet.
 # Derived from OnePlus Pad2Pro erhai-switch, commit adc57231281ac5bc8eb8ee012ffb04663e9f8226.
 # Writes only boot/init_boot/vendor_boot in the active slot. Existing Android
 # images are preseeded from the user's verified backups; no automatic backup.

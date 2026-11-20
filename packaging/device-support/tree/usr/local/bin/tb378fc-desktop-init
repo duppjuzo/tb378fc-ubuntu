@@ -1,0 +1,16 @@
+#!/bin/sh
+# SPDX-License-Identifier: GPL-2.0-only
+# Run once inside a logged-in GNOME session to configure tablet defaults.
+set -eu
+gsettings set org.gnome.desktop.session idle-delay 'uint32 0'
+gsettings set org.gnome.desktop.screensaver lock-enabled false
+gsettings set org.gnome.settings-daemon.peripherals.touchscreen orientation-lock false
+systemctl --user start pipewire.service pipewire-pulse.service wireplumber.service
+for _ in $(seq 1 30); do
+    if wpctl status 2>/dev/null | grep -q 'Lenovo\|Speakers'; then
+        break
+    fi
+    sleep 1
+done
+wpctl set-volume @DEFAULT_AUDIO_SINK@ 0.40 || true
+wpctl set-mute @DEFAULT_AUDIO_SINK@ 0 || true

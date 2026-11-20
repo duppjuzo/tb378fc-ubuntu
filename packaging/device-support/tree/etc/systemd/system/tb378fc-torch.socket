@@ -1,0 +1,11 @@
+[Unit]
+Description=TB378FC local torch controls
+
+[Socket]
+ListenStream=/run/tb378fc-torch.sock
+SocketGroup=video
+SocketMode=0660
+RemoveOnStop=yes
+
+[Install]
+WantedBy=sockets.target
