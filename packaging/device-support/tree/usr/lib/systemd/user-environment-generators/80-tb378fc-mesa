@@ -1,7 +1,7 @@
 #!/bin/sh
 # SPDX-License-Identifier: GPL-2.0-only
-# Activate a private Mesa prefix when installed and the Adreno GPU is bound.
-# If host Mesa is installed as standard Ubuntu system packages, this is a no-op.
+# Activate the private Mesa 26.2.6 (Adreno 830 Freedreno + Turnip) prefix when
+# installed and the Adreno GPU is bound.
 set -eu
 
 gpu=/sys/bus/platform/drivers/adreno/3d00000.gpu
@@ -13,6 +13,11 @@ for prefix in /usr/lib/tb378fc/mesa /usr/lib/erhai/mesa; do
         echo "LIBGL_DRIVERS_PATH=$prefix/lib/dri"
         echo "GBM_BACKENDS_PATH=$prefix/lib/gbm"
         echo "__EGL_VENDOR_LIBRARY_DIRS=$prefix/share/glvnd/egl_vendor.d"
+        icd="$prefix/share/vulkan/icd.d/freedreno_icd.aarch64.json"
+        if [ -r "$icd" ]; then
+            echo "VK_DRIVER_FILES=$icd"
+            echo "VK_ICD_FILENAMES=$icd"
+        fi
         exit 0
     fi
 done

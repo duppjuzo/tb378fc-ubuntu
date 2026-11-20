@@ -96,6 +96,17 @@ class TestInitramfsAndPackaging(unittest.TestCase):
         self.assertIn('/bin/tb378fc-shutdown', builder_text)
         self.assertIn('/bin/tb378fc-shutdown', init_text)
 
+    def test_electron_wayland_and_video_env(self):
+        wl = (ROOT / 'packaging/device-support/tree/usr/lib/environment.d/60-tb378fc-wayland.conf').read_text(encoding='utf-8')
+        self.assertIn('ELECTRON_OZONE_PLATFORM_HINT=auto', wl)
+        self.assertIn('MOZ_ENABLE_WAYLAND=1', wl)
+        self.assertIn('QT_QPA_PLATFORM="wayland;xcb"', wl)
+        mesa_gen = (ROOT / 'packaging/device-support/tree/usr/lib/systemd/user-environment-generators/80-tb378fc-mesa').read_text(encoding='utf-8')
+        self.assertIn('VK_DRIVER_FILES=', mesa_gen)
+        vid = (ROOT / 'packaging/video-defaults/tree/usr/lib/environment.d/60-tb378fc-video.conf').read_text(encoding='utf-8')
+        self.assertIn('GST_VA_ALL_DRIVERS=1', vid)
+        self.assertIn('vah264dec:512', vid)
+
     def test_tb378fc_vulkan_prefers_private_mesa_prefix(self):
         vk_text = (ROOT / 'packaging/device-support/tree/usr/local/bin/tb378fc-vulkan').read_text(encoding='utf-8')
         self.assertIn('/usr/lib/tb378fc/mesa/share/vulkan/icd.d/freedreno_icd.aarch64.json', vk_text)

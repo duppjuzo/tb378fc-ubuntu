@@ -26,7 +26,7 @@ jobs:
       - name: Run device-support unit tests
         run: python3 -m unittest discover -s tests -v
       - name: Run switch logic offline tests
-        run: python3 tools/validation/test_switch.py
+        run: sudo python3 tools/validation/test_switch.py
       - name: Smoke-test rootless .deb packaging
         run: |
           python3 tools/build-debs.py --version 0.2.0-ci --output /tmp/ci-debs

@@ -1,0 +1,10 @@
+Package: tb378fc-video-defaults
+Version: @VERSION@
+Architecture: all
+Maintainer: TB378FC Maintainer <maintainer@tb378fc.local>
+Section: video
+Priority: optional
+Depends: tb378fc-iris-vaapi (>= 0.4.0), gstreamer1.0-plugins-good, gstreamer1.0-plugins-bad, gstreamer1.0-libav
+Description: Qualcomm Iris VA-API video defaults for Lenovo TB378FC
+ Configures GStreamer VA decoder priority, Firefox VA-API preferences,
+ and Chromium Wayland/VA-API flags for SM8750P Iris VPU35.
