@@ -1,6 +1,6 @@
-From 8081a63286ca0c59a9cfa5d984160d5d691f2526 Mon Sep 17 00:00:00 2001
+From 7e3697ed6b7815f86598631e45302e0fafeffafb Mon Sep 17 00:00:00 2001
 From: TB378FC Maintainer <maintainer@tb378fc.local>
-Date: Fri, 20 Nov 2026 19:39:19 +0800
+Date: Fri, 20 Nov 2026 20:55:21 +0800
 Subject: [PATCH] drm/msm: preserve direct scanout, VBIF arbitration, and
  native seamless DFPS
 
@@ -11,6 +11,8 @@ Subject: [PATCH] drm/msm: preserve direct scanout, VBIF arbitration, and
 3. Implement native in-tree seamless video-mode DFPS (TIMING_DB_MODE +
    TIMING_FLUSH + DPU INTF timing update) for matching-clock refresh
    switches (60/120/144Hz), eliminating out-of-tree struct-prefix hooks.
+
+Signed-off-by: TB378FC Maintainer <maintainer@tb378fc.local>
 ---
  drivers/gpu/drm/msm/disp/dpu1/dpu_crtc.c      |  56 +++++++++
  drivers/gpu/drm/msm/disp/dpu1/dpu_crtc.h      |   1 +
@@ -18,12 +20,12 @@ Subject: [PATCH] drm/msm: preserve direct scanout, VBIF arbitration, and
  drivers/gpu/drm/msm/disp/dpu1/dpu_encoder.h   |   5 +
  drivers/gpu/drm/msm/dsi/dsi.c                 |  22 ++++
  drivers/gpu/drm/msm/dsi/dsi.h                 |   6 +
- drivers/gpu/drm/msm/dsi/dsi_host.c            | 117 +++++++++++++++++-
+ drivers/gpu/drm/msm/dsi/dsi_host.c            | 118 +++++++++++++++++-
  drivers/gpu/drm/msm/msm_drv.h                 |  15 +++
  drivers/gpu/drm/msm/msm_iommu.c               |  29 +++++
  drivers/gpu/drm/msm/msm_kms.c                 |  47 ++++++-
  drivers/gpu/drm/msm/registers/display/dsi.xml |   3 +
- 11 files changed, 365 insertions(+), 4 deletions(-)
+ 11 files changed, 366 insertions(+), 4 deletions(-)
 
 diff --git a/drivers/gpu/drm/msm/disp/dpu1/dpu_crtc.c b/drivers/gpu/drm/msm/disp/dpu1/dpu_crtc.c
 index e3f4590c8df..44be699210a 100644
@@ -262,7 +264,7 @@ index 5edcd6ad4a3..7fa70bd0957 100644
  				  const struct drm_display_mode *mode);
  enum drm_mode_status msm_dsi_host_check_dsc(struct mipi_dsi_host *host,
 diff --git a/drivers/gpu/drm/msm/dsi/dsi_host.c b/drivers/gpu/drm/msm/dsi/dsi_host.c
-index a58ca12ad27..27cb717c2b8 100644
+index a58ca12ad27..437341a12a9 100644
 --- a/drivers/gpu/drm/msm/dsi/dsi_host.c
 +++ b/drivers/gpu/drm/msm/dsi/dsi_host.c
 @@ -1484,10 +1484,26 @@ static int dsi_cmd_dma_tx(struct msm_dsi_host *msm_host, int len)
@@ -310,7 +312,7 @@ index a58ca12ad27..27cb717c2b8 100644
  	dsi_write(msm_host, REG_DSI_DMA_BASE, dma_base);
  	dsi_write(msm_host, REG_DSI_DMA_LEN, len);
  	dsi_write(msm_host, REG_DSI_TRIG_DMA, 1);
-@@ -2668,6 +2693,94 @@ int msm_dsi_host_power_off(struct mipi_dsi_host *host)
+@@ -2668,6 +2693,95 @@ int msm_dsi_host_power_off(struct mipi_dsi_host *host)
  	return 0;
  }
  
@@ -398,6 +400,7 @@ index a58ca12ad27..27cb717c2b8 100644
 +	dsi_write(msm_host, REG_DSI_ACTIVE_VSYNC_HPOS, 0);
 +	dsi_write(msm_host, REG_DSI_ACTIVE_VSYNC_VPOS,
 +		  DSI_ACTIVE_VSYNC_VPOS_START(0) | DSI_ACTIVE_VSYNC_VPOS_END(vs_end));
++	/* Ensure all timing register updates are visible before TIMING_FLUSH */
 +	wmb();
 +	dsi_write(msm_host, REG_DSI_TIMING_FLUSH, 1);
 +}

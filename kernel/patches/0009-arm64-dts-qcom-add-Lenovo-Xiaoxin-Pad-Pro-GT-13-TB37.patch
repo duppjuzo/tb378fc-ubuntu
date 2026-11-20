@@ -1,6 +1,6 @@
-From 1aeea96cd1319fb6b1ecd7d3c0743b57b58d20ff Mon Sep 17 00:00:00 2001
+From 25010e9dfdf7b59ef2255bfacec5f7cf170c5f2d Mon Sep 17 00:00:00 2001
 From: TB378FC Maintainer <maintainer@tb378fc.local>
-Date: Fri, 20 Nov 2026 19:39:20 +0800
+Date: Fri, 20 Nov 2026 20:55:22 +0800
 Subject: [PATCH] arm64: dts: qcom: add Lenovo Xiaoxin Pad Pro GT 13 (TB378FC)
 
 Add the unified Linux 7.4 devicetree for Lenovo Xiaoxin Pad Pro GT 13
@@ -8,11 +8,13 @@ Add the unified Linux 7.4 devicetree for Lenovo Xiaoxin Pad Pro GT 13
 WCD9390 SoundWire mic/USBSS, WCN7860 Wi-Fi/BT, Iris VPU, PM8550 flash,
 dual CAMSS cameras on standalone CSI-2 PHYs, SM8750P 118C passive CPU
 thermal zones, ABL root identity restore, and 8GB-safe ramoops.
+
+Signed-off-by: TB378FC Maintainer <maintainer@tb378fc.local>
 ---
  arch/arm64/boot/dts/qcom/Makefile             |    1 +
  .../qcom/sm8750-lenovo-tb378fc-camera.dtsi    |  220 +++
- .../boot/dts/qcom/sm8750-lenovo-tb378fc.dts   | 1549 +++++++++++++++++
- 3 files changed, 1770 insertions(+)
+ .../boot/dts/qcom/sm8750-lenovo-tb378fc.dts   | 1557 +++++++++++++++++
+ 3 files changed, 1778 insertions(+)
  create mode 100644 arch/arm64/boot/dts/qcom/sm8750-lenovo-tb378fc-camera.dtsi
  create mode 100644 arch/arm64/boot/dts/qcom/sm8750-lenovo-tb378fc.dts
 
@@ -256,10 +258,10 @@ index 00000000000..fc83d622c0f
 +};
 diff --git a/arch/arm64/boot/dts/qcom/sm8750-lenovo-tb378fc.dts b/arch/arm64/boot/dts/qcom/sm8750-lenovo-tb378fc.dts
 new file mode 100644
-index 00000000000..2c0e4bef272
+index 00000000000..f846af2be06
 --- /dev/null
 +++ b/arch/arm64/boot/dts/qcom/sm8750-lenovo-tb378fc.dts
-@@ -0,0 +1,1549 @@
+@@ -0,0 +1,1557 @@
 +// SPDX-License-Identifier: BSD-3-Clause
 +/*
 + * Lenovo Xiaoxin Pad Pro GT 13 (TB378FC) - Qualcomm SM8750P mainline board DTS.
@@ -308,7 +310,7 @@ index 00000000000..2c0e4bef272
 +
 +	reserved-memory {
 +		/* Preserve UEFI active scanout across SMMU handover. */
-+		tb378fc_splash: splash_region {
++		tb378fc_splash: splash_region@fc800000 {
 +			label = "cont_splash_region";
 +			reg = <0x0 0xfc800000 0x0 0x2b00000>;
 +			no-map;
@@ -498,7 +500,7 @@ index 00000000000..2c0e4bef272
 +		qcom,tx-device = <&wcd939x_tx>;
 +	};
 +
-+	tb378fc_amp_bus: tb378fc-amp-i2c {
++	tb378fc_amp_bus: i2c-amp {
 +		compatible = "i2c-gpio";
 +		#address-cells = <1>;
 +		#size-cells = <0>;
@@ -1100,7 +1102,7 @@ index 00000000000..2c0e4bef272
 +};
 +
 +&apps_rsc {
-+	regulators-b {
++	regulators-0 {
 +		compatible = "qcom,pm8550-rpmh-regulators";
 +		qcom,pmic-id = "b";
 +		vdd-bob1-supply = <&vph_pwr>;
@@ -1140,6 +1142,8 @@ index 00000000000..2c0e4bef272
 +			regulator-max-microvolt = <2800000>;
 +			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
 +			regulator-allow-set-load;
++			regulator-allowed-modes = <RPMH_REGULATOR_MODE_LPM
++						   RPMH_REGULATOR_MODE_HPM>;
 +		};
 +
 +		vreg_l8b_cam: ldo8 {
@@ -1148,6 +1152,8 @@ index 00000000000..2c0e4bef272
 +			regulator-max-microvolt = <2800000>;
 +			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
 +			regulator-allow-set-load;
++			regulator-allowed-modes = <RPMH_REGULATOR_MODE_LPM
++						   RPMH_REGULATOR_MODE_HPM>;
 +		};
 +
 +		vreg_l10b_cam: ldo10 {
@@ -1156,6 +1162,8 @@ index 00000000000..2c0e4bef272
 +			regulator-max-microvolt = <1800000>;
 +			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
 +			regulator-allow-set-load;
++			regulator-allowed-modes = <RPMH_REGULATOR_MODE_LPM
++						   RPMH_REGULATOR_MODE_HPM>;
 +		};
 +
 +		vreg_l11b_cam: ldo11 {
@@ -1164,6 +1172,8 @@ index 00000000000..2c0e4bef272
 +			regulator-max-microvolt = <1200000>;
 +			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
 +			regulator-allow-set-load;
++			regulator-allowed-modes = <RPMH_REGULATOR_MODE_LPM
++						   RPMH_REGULATOR_MODE_HPM>;
 +		};
 +
 +		panel_vddio: ldo12 {
@@ -1186,6 +1196,8 @@ index 00000000000..2c0e4bef272
 +			regulator-max-microvolt = <2800000>;
 +			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
 +			regulator-allow-set-load;
++			regulator-allowed-modes = <RPMH_REGULATOR_MODE_LPM
++						   RPMH_REGULATOR_MODE_HPM>;
 +		};
 +
 +		vreg_l17b_ufs: ldo17 {
@@ -1199,7 +1211,7 @@ index 00000000000..2c0e4bef272
 +		};
 +	};
 +
-+	regulators-d {
++	regulators-1 {
 +		compatible = "qcom,pm8550ve-rpmh-regulators";
 +		qcom,pmic-id = "d";
 +		vdd-s1-supply = <&vph_pwr>;
@@ -1238,7 +1250,7 @@ index 00000000000..2c0e4bef272
 +		};
 +	};
 +
-+	regulators-f {
++	regulators-2 {
 +		compatible = "qcom,pm8550ve-rpmh-regulators";
 +		qcom,pmic-id = "f";
 +		vdd-l1-supply = <&vreg_s1d>;
@@ -1275,7 +1287,7 @@ index 00000000000..2c0e4bef272
 +		};
 +	};
 +
-+	regulators-g {
++	regulators-3 {
 +		compatible = "qcom,pm8550ve-rpmh-regulators";
 +		qcom,pmic-id = "g";
 +		vdd-s3-supply = <&vph_pwr>;
@@ -1295,7 +1307,7 @@ index 00000000000..2c0e4bef272
 +		};
 +	};
 +
-+	regulators-i {
++	regulators-4 {
 +		compatible = "qcom,pm8550ve-rpmh-regulators";
 +		qcom,pmic-id = "i";
 +		vdd-s7-supply = <&vph_pwr>;
@@ -1315,6 +1327,8 @@ index 00000000000..2c0e4bef272
 +			regulator-max-microvolt = <1200000>;
 +			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
 +			regulator-allow-set-load;
++			regulator-allowed-modes = <RPMH_REGULATOR_MODE_LPM
++						   RPMH_REGULATOR_MODE_HPM>;
 +		};
 +
 +		dsi_phy_supply: ldo3 {
@@ -1325,7 +1339,7 @@ index 00000000000..2c0e4bef272
 +		};
 +	};
 +
-+	regulators-j {
++	regulators-5 {
 +		compatible = "qcom,pm8550vs-rpmh-regulators";
 +		qcom,pmic-id = "j";
 +		vdd-l1-supply = <&vreg_s1d>;
@@ -1352,7 +1366,6 @@ index 00000000000..2c0e4bef272
 +		function = "mdp_vsync";
 +		drive-strength = <2>;
 +		bias-disable;
-+		input-enable;
 +	};
 +
 +	tb378fc_touch_irq: tb378fc-touch-irq-state {
@@ -1360,7 +1373,6 @@ index 00000000000..2c0e4bef272
 +		function = "gpio";
 +		drive-strength = <2>;
 +		bias-pull-up;
-+		input-enable;
 +	};
 +
 +	tb378fc_wlan_en: wlan-enable-state {
@@ -1589,13 +1601,12 @@ index 00000000000..2c0e4bef272
 +	bluetooth {
 +		compatible = "qcom,wcn7860-bt";
 +		max-speed = <3200000>;
-+		vddrfacmn-supply = <&vreg_pmu_rfa_cmn>;
 +		vddaon-supply = <&vreg_pmu_aon_0p59>;
-+		vddwlcx-supply = <&vreg_pmu_wlcx_0p8>;
-+		vddwlmx-supply = <&vreg_pmu_wlmx_0p85>;
-+		vddrfa0p8-supply = <&vreg_pmu_rfa_0p8>;
-+		vddrfa1p2-supply = <&vreg_pmu_rfa_1p2>;
-+		vddrfa1p8-supply = <&vreg_pmu_rfa_1p8>;
++		vddbtcx-supply = <&vreg_pmu_wlcx_0p8>;
++		vddbtcmx-supply = <&vreg_pmu_wlmx_0p85>;
++		vddrfa0p9-supply = <&vreg_pmu_rfa_0p8>;
++		vddrfa1p3-supply = <&vreg_pmu_rfa_1p2>;
++		vddrfa1p9-supply = <&vreg_pmu_rfa_1p8>;
 +	};
 +};
 +
@@ -1620,15 +1631,14 @@ index 00000000000..2c0e4bef272
 +		compatible = "pci17cb,110e";
 +		reg = <0x10000 0x0 0x0 0x0 0x0>;
 +
-+		vddrfacmn-supply = <&vreg_pmu_rfa_cmn>;
 +		vddaon-supply = <&vreg_pmu_aon_0p59>;
 +		vddwlcx-supply = <&vreg_pmu_wlcx_0p8>;
 +		vddwlmx-supply = <&vreg_pmu_wlmx_0p85>;
-+		vddrfa0p8-supply = <&vreg_pmu_rfa_0p8>;
-+		vddrfa1p2-supply = <&vreg_pmu_rfa_1p2>;
-+		vddrfa1p8-supply = <&vreg_pmu_rfa_1p8>;
++		vddrfa0p9-supply = <&vreg_pmu_rfa_0p8>;
++		vddrfa1p3-supply = <&vreg_pmu_rfa_1p2>;
++		vddrfa1p9-supply = <&vreg_pmu_rfa_1p8>;
 +		vddpcie0p9-supply = <&vreg_pmu_pcie_0p9>;
-+		vddpcie1p8-supply = <&vreg_pmu_pcie_1p8>;
++		vddpcie1p2-supply = <&vreg_pmu_pcie_1p8>;
 +	};
 +};
 +

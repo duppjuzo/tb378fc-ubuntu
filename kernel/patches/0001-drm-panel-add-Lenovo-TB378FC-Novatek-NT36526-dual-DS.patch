@@ -1,12 +1,14 @@
-From 1e4d8dea32de400c202a5d01987be6c2a7df7751 Mon Sep 17 00:00:00 2001
+From eb52d8942c40c23aba7af8f0a89856a080207580 Mon Sep 17 00:00:00 2001
 From: TB378FC Maintainer <maintainer@tb378fc.local>
-Date: Fri, 20 Nov 2026 19:39:19 +0800
+Date: Fri, 20 Nov 2026 20:55:20 +0800
 Subject: [PATCH] drm/panel: add Lenovo TB378FC Novatek NT36526 dual-DSI DSC
  panel
 
 Port CSOT NT36526 dual-DSI DSC panel driver to Linux 7.4 using
 devm_drm_panel_add() and MIPI_DSI_MODE_DSC_ALL_SLICES_IN_PKT, and
 expose all three native refresh modes (120Hz preferred, 60Hz, 144Hz).
+
+Signed-off-by: TB378FC Maintainer <maintainer@tb378fc.local>
 ---
  drivers/gpu/drm/panel/Kconfig                 |  11 +
  drivers/gpu/drm/panel/Makefile                |   1 +

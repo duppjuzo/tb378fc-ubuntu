@@ -1,11 +1,13 @@
-From c751f1eb2430e1d70e27330d9f352428fafcef0c Mon Sep 17 00:00:00 2001
+From b3b6d5dd5ecd155e6f3594cd2f1bd712cd7cd5dc Mon Sep 17 00:00:00 2001
 From: TB378FC Maintainer <maintainer@tb378fc.local>
-Date: Fri, 20 Nov 2026 19:39:20 +0800
+Date: Fri, 20 Nov 2026 20:55:21 +0800
 Subject: [PATCH] Input: nt36536 - add Lenovo TB378FC variant and trim ID
 
 Add the TB378FC chip trim ID (0x15/0x23/0x65/0x03) and lenovo,tb378fc-nvt
 variant with native stylus pressure ceiling (4095) and strict chip-ID
 validation scoped only to TB378FC.
+
+Signed-off-by: TB378FC Maintainer <maintainer@tb378fc.local>
 ---
  drivers/input/touchscreen/nt36536/nt36536.c         | 13 +++++++++++++
  drivers/input/touchscreen/nt36536/nt36536.h         |  1 +

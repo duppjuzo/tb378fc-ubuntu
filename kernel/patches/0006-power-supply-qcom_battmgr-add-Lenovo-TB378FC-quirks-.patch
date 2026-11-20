@@ -1,12 +1,14 @@
-From 2d1f4290389fb75b4c63dc898c0563fa180d3da1 Mon Sep 17 00:00:00 2001
+From 4a7d48521a78a9986782ad269faede25c8d33577 Mon Sep 17 00:00:00 2001
 From: TB378FC Maintainer <maintainer@tb378fc.local>
-Date: Fri, 20 Nov 2026 19:39:20 +0800
+Date: Fri, 20 Nov 2026 20:55:21 +0800
 Subject: [PATCH] power: supply: qcom_battmgr: add Lenovo TB378FC quirks and
  diagnostics
 
 Add lenovo,tb378fc-pmic-glink binding and quirks (inverted battery
 current, hidden inconsistent power_now, bounded 0..900mA USB ICL
 writes on SDP/CDP/PD, and read-only opcode 0x60 telemetry sysfs).
+
+Signed-off-by: TB378FC Maintainer <maintainer@tb378fc.local>
 ---
  .../bindings/soc/qcom/qcom,pmic-glink.yaml    |  10 ++
  drivers/power/supply/qcom_battmgr.c           | 131 ++++++++++++++++++

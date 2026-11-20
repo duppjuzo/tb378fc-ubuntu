@@ -1,11 +1,13 @@
-From dfe3210e2718655219c0a956efdbc3061d629387 Mon Sep 17 00:00:00 2001
+From 17ddb3a1abcd623cd5dafce30770c5c94afdcbb7 Mon Sep 17 00:00:00 2001
 From: TB378FC Maintainer <maintainer@tb378fc.local>
-Date: Fri, 20 Nov 2026 19:39:19 +0800
+Date: Fri, 20 Nov 2026 20:55:20 +0800
 Subject: [PATCH] display: add TB378FC panel bias regulator and dual AW99706B
  backlight
 
 Add the board-specific paired ENP/ENN LCD bias regulator and dual-I2C
 AW99706B backlight drivers used by Lenovo TB378FC.
+
+Signed-off-by: TB378FC Maintainer <maintainer@tb378fc.local>
 ---
  drivers/regulator/Kconfig                  |   8 +
  drivers/regulator/Makefile                 |   1 +

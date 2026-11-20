@@ -1,12 +1,14 @@
-From 85c799503454bd6b8219044c623e0f47736dc8a8 Mon Sep 17 00:00:00 2001
+From df8a5bb3575cc3567359efc70268a11c7b66b9b3 Mon Sep 17 00:00:00 2001
 From: TB378FC Maintainer <maintainer@tb378fc.local>
-Date: Fri, 20 Nov 2026 19:39:20 +0800
+Date: Fri, 20 Nov 2026 20:55:21 +0800
 Subject: [PATCH] media: TB378FC: add GC08A8, OV13B10 board support, and CAMSS
  Gen4 alignment
 
 Add the GalaxyCore GC08A8 front sensor driver, add OF matching and
 TB378FC VAF/power sequencing to OV13B10, and align CAMSS Gen4 RDI
 sizeimage to 256 bytes to match VFE_BUS_WM_FRAME_INCR hardware units.
+
+Signed-off-by: TB378FC Maintainer <maintainer@tb378fc.local>
 ---
  drivers/media/i2c/Kconfig                     |  10 +
  drivers/media/i2c/Makefile                    |   1 +

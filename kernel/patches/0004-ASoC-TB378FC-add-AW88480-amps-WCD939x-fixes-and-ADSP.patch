@@ -1,6 +1,6 @@
-From c99ac4b97be588166cc6c21bea9204c019354712 Mon Sep 17 00:00:00 2001
+From 2d2c8264eaa025709323f36a8c6588a2e1b30e75 Mon Sep 17 00:00:00 2001
 From: TB378FC Maintainer <maintainer@tb378fc.local>
-Date: Fri, 20 Nov 2026 19:39:19 +0800
+Date: Fri, 20 Nov 2026 20:55:21 +0800
 Subject: [PATCH] ASoC: TB378FC: add AW88480 amps, WCD939x fixes, and ADSP
  defer
 
@@ -8,6 +8,8 @@ Add the AW88480 quad speaker amplifier driver, serialize WCD939x
 SoundWire IRQ callback against IRQ domain teardown, apply TB378FC's
 native SoundWire TX ADC port mapping, and defer q6apm-dai probe until
 ADSP SPF reports ready.
+
+Signed-off-by: TB378FC Maintainer <maintainer@tb378fc.local>
 ---
  sound/soc/codecs/Kconfig         |  10 +
  sound/soc/codecs/Makefile        |   2 +
