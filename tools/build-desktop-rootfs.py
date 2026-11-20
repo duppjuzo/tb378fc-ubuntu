@@ -15,6 +15,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import shlex
 import shutil
 import subprocess
 import sys
@@ -155,7 +156,8 @@ def verify_chroot(root: Path, kernel_release: str) -> dict:
     for line in gen_out.splitlines():
         if "=" in line:
             k, v = line.split("=", 1)
-            env_map[k] = v
+            parts = shlex.split(v)
+            env_map[k] = parts[0] if len(parts) == 1 else v
     required_env = {
         "ELECTRON_OZONE_PLATFORM_HINT": "auto",
         "OZONE_PLATFORM_HINT": "auto",
