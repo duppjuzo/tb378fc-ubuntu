@@ -1,0 +1,577 @@
+From 8081a63286ca0c59a9cfa5d984160d5d691f2526 Mon Sep 17 00:00:00 2001
+From: TB378FC Maintainer <maintainer@tb378fc.local>
+Date: Fri, 20 Nov 2026 19:39:19 +0800
+Subject: [PATCH] drm/msm: preserve direct scanout, VBIF arbitration, and
+ native seamless DFPS
+
+1. Preserve UEFI direct-mapped splash regions across SMMU attach and
+   choose the largest free 32-bit KMS IOVA aperture.
+2. Program DSI 6G v2.8+ VBIF_CTRL command DMA arbitration and dump
+   controller state on DMA timeouts.
+3. Implement native in-tree seamless video-mode DFPS (TIMING_DB_MODE +
+   TIMING_FLUSH + DPU INTF timing update) for matching-clock refresh
+   switches (60/120/144Hz), eliminating out-of-tree struct-prefix hooks.
+---
+ drivers/gpu/drm/msm/disp/dpu1/dpu_crtc.c      |  56 +++++++++
+ drivers/gpu/drm/msm/disp/dpu1/dpu_crtc.h      |   1 +
+ drivers/gpu/drm/msm/disp/dpu1/dpu_encoder.c   |  68 ++++++++++
+ drivers/gpu/drm/msm/disp/dpu1/dpu_encoder.h   |   5 +
+ drivers/gpu/drm/msm/dsi/dsi.c                 |  22 ++++
+ drivers/gpu/drm/msm/dsi/dsi.h                 |   6 +
+ drivers/gpu/drm/msm/dsi/dsi_host.c            | 117 +++++++++++++++++-
+ drivers/gpu/drm/msm/msm_drv.h                 |  15 +++
+ drivers/gpu/drm/msm/msm_iommu.c               |  29 +++++
+ drivers/gpu/drm/msm/msm_kms.c                 |  47 ++++++-
+ drivers/gpu/drm/msm/registers/display/dsi.xml |   3 +
+ 11 files changed, 365 insertions(+), 4 deletions(-)
+
+diff --git a/drivers/gpu/drm/msm/disp/dpu1/dpu_crtc.c b/drivers/gpu/drm/msm/disp/dpu1/dpu_crtc.c
+index e3f4590c8df..44be699210a 100644
+--- a/drivers/gpu/drm/msm/disp/dpu1/dpu_crtc.c
++++ b/drivers/gpu/drm/msm/disp/dpu1/dpu_crtc.c
+@@ -1038,6 +1038,19 @@ static void dpu_crtc_atomic_flush(struct drm_crtc *crtc,
+ 		dpu_plane_flush(plane);
+ 	}
+ 
++	if (cstate->seamless_dfps && !crtc->state->mode_changed) {
++		struct drm_encoder *enc;
++
++		drm_for_each_encoder_mask(enc, dev, crtc->state->encoder_mask)
++			dpu_encoder_seamless_dfps_commit(enc, &crtc->state->adjusted_mode);
++		drm_calc_timestamping_constants(crtc, &crtc->state->adjusted_mode);
++		drm_dbg_kms(dev, "crtc%d: seamless DFPS switch to %dHz (%ux%u)\n",
++			    crtc->base.id,
++			    drm_mode_vrefresh(&crtc->state->adjusted_mode),
++			    crtc->state->adjusted_mode.htotal,
++			    crtc->state->adjusted_mode.vtotal);
++	}
++
+ 	/* Kickoff will be scheduled by outer layer */
+ }
+ 
+@@ -1212,6 +1225,7 @@ static struct drm_crtc_state *dpu_crtc_duplicate_state(struct drm_crtc *crtc)
+ 
+ 	/* duplicate base helper */
+ 	__drm_atomic_helper_crtc_duplicate_state(crtc, &cstate->base);
++	cstate->seamless_dfps = false;
+ 
+ 	return &cstate->base;
+ }
+@@ -1650,6 +1664,48 @@ static int dpu_crtc_atomic_check(struct drm_crtc *crtc,
+ 		return rc;
+ 	}
+ 
++	/*
++	 * Promote eligible same-topology video-mode DSI refresh-rate switches
++	 * to seamless double-buffered DFPS, avoiding full panel/PHY teardown.
++	 */
++	if (crtc_state->mode_changed && !crtc_state->active_changed &&
++	    !crtc_state->connectors_changed && !crtc_state->color_mgmt_changed) {
++		struct drm_crtc_state *old_crtc_state =
++			drm_atomic_get_old_crtc_state(state, crtc);
++
++		if (old_crtc_state && old_crtc_state->enable && old_crtc_state->active &&
++		    old_crtc_state->encoder_mask == crtc_state->encoder_mask &&
++		    hweight32(crtc_state->encoder_mask) == 1) {
++			struct dpu_crtc_state *old_cstate = to_dpu_crtc_state(old_crtc_state);
++			bool same_topology = old_cstate->num_mixers == cstate->num_mixers &&
++					     old_cstate->num_ctls == cstate->num_ctls;
++			u32 i;
++
++			for (i = 0; same_topology && i < old_cstate->num_mixers; i++) {
++				if (old_cstate->mixers[i].hw_lm != cstate->mixers[i].hw_lm ||
++				    old_cstate->mixers[i].lm_ctl != cstate->mixers[i].lm_ctl ||
++				    old_cstate->mixers[i].hw_dspp != cstate->mixers[i].hw_dspp)
++					same_topology = false;
++			}
++			for (i = 0; same_topology && i < old_cstate->num_ctls; i++) {
++				if (old_cstate->hw_ctls[i] != cstate->hw_ctls[i])
++					same_topology = false;
++			}
++			if (same_topology) {
++				struct drm_encoder *enc;
++
++				drm_for_each_encoder_mask(enc, crtc->dev, crtc_state->encoder_mask) {
++					if (dpu_encoder_can_seamless_dfps(enc,
++							&old_crtc_state->adjusted_mode,
++							&crtc_state->adjusted_mode)) {
++						cstate->seamless_dfps = true;
++						crtc_state->mode_changed = false;
++					}
++				}
++			}
++		}
++	}
++
+ 	return 0;
+ }
+ 
+diff --git a/drivers/gpu/drm/msm/disp/dpu1/dpu_crtc.h b/drivers/gpu/drm/msm/disp/dpu1/dpu_crtc.h
+index 6eaba5696e8..5feb462e034 100644
+--- a/drivers/gpu/drm/msm/disp/dpu1/dpu_crtc.h
++++ b/drivers/gpu/drm/msm/disp/dpu1/dpu_crtc.h
+@@ -210,6 +210,7 @@ struct dpu_crtc_state {
+ 
+ 	bool bw_control;
+ 	bool bw_split_vote;
++	bool seamless_dfps;
+ 	struct drm_rect lm_bounds[CRTC_DUAL_MIXERS];
+ 
+ 	uint64_t input_fence_timeout_ns;
+diff --git a/drivers/gpu/drm/msm/disp/dpu1/dpu_encoder.c b/drivers/gpu/drm/msm/disp/dpu1/dpu_encoder.c
+index e62d636be35..c153603c903 100644
+--- a/drivers/gpu/drm/msm/disp/dpu1/dpu_encoder.c
++++ b/drivers/gpu/drm/msm/disp/dpu1/dpu_encoder.c
+@@ -3029,6 +3029,74 @@ unsigned int dpu_encoder_helper_get_cwb_mask(struct dpu_encoder_phys *phys_enc)
+  *   used for this encoder.
+  * @phys_enc: Pointer to physical encoder structure
+  */
++bool dpu_encoder_can_seamless_dfps(struct drm_encoder *drm_enc,
++				   const struct drm_display_mode *old_mode,
++				   const struct drm_display_mode *new_mode)
++{
++	struct msm_drm_private *priv;
++	struct dpu_encoder_virt *dpu_enc;
++	unsigned int i;
++
++	if (!drm_enc || !old_mode || !new_mode)
++		return false;
++
++	priv = drm_enc->dev->dev_private;
++	dpu_enc = to_dpu_encoder_virt(drm_enc);
++	if (!dpu_enc->enabled || dpu_enc->disp_info.intf_type != INTF_DSI ||
++	    !dpu_enc->num_phys_encs || !dpu_enc->cur_master ||
++	    !dpu_enc->disp_info.num_of_h_tiles)
++		return false;
++
++	for (i = 0; i < dpu_enc->num_phys_encs; i++) {
++		struct dpu_encoder_phys *phys = dpu_enc->phys_encs[i];
++
++		if (!phys || phys->parent != drm_enc || !phys->hw_intf ||
++		    !phys->hw_ctl || phys->hw_intf->cap->type != INTF_DSI ||
++		    phys->enable_state != DPU_ENC_ENABLED || !phys->ops.enable ||
++		    !drm_mode_equal(&phys->cached_mode, old_mode))
++			return false;
++	}
++
++	for (i = 0; i < dpu_enc->disp_info.num_of_h_tiles; i++) {
++		u32 dsi_idx = dpu_enc->disp_info.h_tile_instance[i];
++
++		if (dsi_idx >= ARRAY_SIZE(priv->kms->dsi) ||
++		    !msm_dsi_can_dfps(priv->kms->dsi[dsi_idx], old_mode, new_mode))
++			return false;
++	}
++
++	return true;
++}
++
++void dpu_encoder_seamless_dfps_commit(struct drm_encoder *drm_enc,
++				      const struct drm_display_mode *mode)
++{
++	struct msm_drm_private *priv = drm_enc->dev->dev_private;
++	struct dpu_encoder_virt *dpu_enc = to_dpu_encoder_virt(drm_enc);
++	unsigned int i;
++
++	/* Update DSI timing engine(s) with double-buffered flush (clock master first). */
++	for (i = 0; i < dpu_enc->disp_info.num_of_h_tiles; i++) {
++		u32 dsi_idx = dpu_enc->disp_info.h_tile_instance[i];
++
++		if (dsi_idx < ARRAY_SIZE(priv->kms->dsi))
++			msm_dsi_dfps_timing_update(priv->kms->dsi[dsi_idx], mode);
++	}
++
++	/*
++	 * Reprogram DPU INTF timing registers on already-enabled physical
++	 * encoders. ops.enable() keeps enable_state == DPU_ENC_ENABLED and
++	 * queues the pending INTF flush to join the regular atomic kickoff.
++	 */
++	for (i = 0; i < dpu_enc->num_phys_encs; i++)
++		dpu_enc->phys_encs[i]->cached_mode = *mode;
++
++	if (dpu_enc->cur_slave && dpu_enc->cur_slave->ops.enable)
++		dpu_enc->cur_slave->ops.enable(dpu_enc->cur_slave);
++	if (dpu_enc->cur_master && dpu_enc->cur_master->ops.enable)
++		dpu_enc->cur_master->ops.enable(dpu_enc->cur_master);
++}
++
+ unsigned int dpu_encoder_helper_get_dsc(struct dpu_encoder_phys *phys_enc)
+ {
+ 	struct drm_encoder *encoder = phys_enc->parent;
+diff --git a/drivers/gpu/drm/msm/disp/dpu1/dpu_encoder.h b/drivers/gpu/drm/msm/disp/dpu1/dpu_encoder.h
+index 4942097e761..6407157c50f 100644
+--- a/drivers/gpu/drm/msm/disp/dpu1/dpu_encoder.h
++++ b/drivers/gpu/drm/msm/disp/dpu1/dpu_encoder.h
+@@ -98,4 +98,9 @@ void dpu_encoder_cleanup_wb_job(struct drm_encoder *drm_enc,
+ bool dpu_encoder_is_valid_for_commit(struct drm_encoder *drm_enc);
+ 
+ void dpu_encoder_start_frame_done_timer(struct drm_encoder *drm_enc);
++bool dpu_encoder_can_seamless_dfps(struct drm_encoder *drm_enc,
++				   const struct drm_display_mode *old_mode,
++				   const struct drm_display_mode *new_mode);
++void dpu_encoder_seamless_dfps_commit(struct drm_encoder *drm_enc,
++				      const struct drm_display_mode *mode);
+ #endif /* __DPU_ENCODER_H__ */
+diff --git a/drivers/gpu/drm/msm/dsi/dsi.c b/drivers/gpu/drm/msm/dsi/dsi.c
+index 745e97e982b..c0529dbfd03 100644
+--- a/drivers/gpu/drm/msm/dsi/dsi.c
++++ b/drivers/gpu/drm/msm/dsi/dsi.c
+@@ -24,6 +24,28 @@ bool msm_dsi_wide_bus_enabled(struct msm_dsi *msm_dsi)
+ 	return msm_dsi_host_is_wide_bus_enabled(msm_dsi->host);
+ }
+ 
++bool msm_dsi_can_dfps(struct msm_dsi *msm_dsi,
++		      const struct drm_display_mode *old_mode,
++		      const struct drm_display_mode *new_mode)
++{
++	if (!msm_dsi || !msm_dsi->host)
++		return false;
++
++	return msm_dsi_host_can_dfps(msm_dsi->host,
++				     msm_dsi_is_bonded_dsi(msm_dsi),
++				     old_mode, new_mode);
++}
++
++void msm_dsi_dfps_timing_update(struct msm_dsi *msm_dsi,
++				const struct drm_display_mode *mode)
++{
++	if (!msm_dsi || !msm_dsi->host)
++		return;
++
++	msm_dsi_host_dfps_timing_update(msm_dsi->host,
++					msm_dsi_is_bonded_dsi(msm_dsi), mode);
++}
++
+ static int dsi_get_phy(struct msm_dsi *msm_dsi)
+ {
+ 	struct platform_device *pdev = msm_dsi->pdev;
+diff --git a/drivers/gpu/drm/msm/dsi/dsi.h b/drivers/gpu/drm/msm/dsi/dsi.h
+index 5edcd6ad4a3..7fa70bd0957 100644
+--- a/drivers/gpu/drm/msm/dsi/dsi.h
++++ b/drivers/gpu/drm/msm/dsi/dsi.h
+@@ -77,6 +77,12 @@ int msm_dsi_host_power_on(struct mipi_dsi_host *host,
+ 			bool is_bonded_dsi, struct msm_dsi_phy *phy);
+ int msm_dsi_host_power_off(struct mipi_dsi_host *host);
+ int msm_dsi_host_reset_after_phy_sync(struct mipi_dsi_host *host);
++bool msm_dsi_host_can_dfps(struct mipi_dsi_host *host, bool is_bonded_dsi,
++			   const struct drm_display_mode *old_mode,
++			   const struct drm_display_mode *new_mode);
++void msm_dsi_host_dfps_timing_update(struct mipi_dsi_host *host,
++				     bool is_bonded_dsi,
++				     const struct drm_display_mode *mode);
+ int msm_dsi_host_set_display_mode(struct mipi_dsi_host *host,
+ 				  const struct drm_display_mode *mode);
+ enum drm_mode_status msm_dsi_host_check_dsc(struct mipi_dsi_host *host,
+diff --git a/drivers/gpu/drm/msm/dsi/dsi_host.c b/drivers/gpu/drm/msm/dsi/dsi_host.c
+index a58ca12ad27..27cb717c2b8 100644
+--- a/drivers/gpu/drm/msm/dsi/dsi_host.c
++++ b/drivers/gpu/drm/msm/dsi/dsi_host.c
+@@ -1484,10 +1484,26 @@ static int dsi_cmd_dma_tx(struct msm_dsi_host *msm_host, int len)
+ 		ret = wait_for_completion_timeout(&msm_host->dma_comp,
+ 					msecs_to_jiffies(200));
+ 		DBG("ret=%d", ret);
+-		if (ret == 0)
++		if (ret == 0) {
++			DRM_DEV_ERROR(&msm_host->pdev->dev,
++				      "DSI cmd DMA timeout id=%d enabled=%d ctrl=%08x status=%08x intr=%08x fifo=%08x lane=%08x trig=%08x dma=%08x base=%08x len=%08x phyerr=%08x to=%08x clk=%08x\n",
++				      msm_host->id, msm_host->enabled,
++				      dsi_read(msm_host, REG_DSI_CTRL),
++				      dsi_read(msm_host, REG_DSI_STATUS0),
++				      dsi_read(msm_host, REG_DSI_INTR_CTRL),
++				      dsi_read(msm_host, REG_DSI_FIFO_STATUS),
++				      dsi_read(msm_host, REG_DSI_LANE_STATUS),
++				      dsi_read(msm_host, REG_DSI_TRIG_CTRL),
++				      dsi_read(msm_host, REG_DSI_CMD_DMA_CTRL),
++				      dsi_read(msm_host, REG_DSI_DMA_BASE),
++				      dsi_read(msm_host, REG_DSI_DMA_LEN),
++				      dsi_read(msm_host, REG_DSI_DLN0_PHY_ERR),
++				      dsi_read(msm_host, REG_DSI_TIMEOUT_STATUS),
++				      dsi_read(msm_host, REG_DSI_CLK_STATUS));
+ 			ret = -ETIMEDOUT;
+-		else
++		} else {
+ 			ret = len;
++		}
+ 	} else {
+ 		ret = len;
+ 	}
+@@ -2402,6 +2418,15 @@ void msm_dsi_host_cmd_xfer_commit(struct mipi_dsi_host *host, u32 dma_base,
+ {
+ 	struct msm_dsi_host *msm_host = to_msm_dsi_host(host);
+ 
++	/* Native DSI 6G v2.8+ command DMA VBIF arbitration priority. */
++	if (msm_dsi_host_version_geq(msm_host, MSM_DSI_VER_MAJOR_6G,
++				     MSM_DSI_6G_VER_MINOR_V2_8_0)) {
++		u32 vbif = dsi_read(msm_host, REG_DSI_VBIF_CTRL);
++
++		if ((vbif & 0x7) != 0x7)
++			dsi_write(msm_host, REG_DSI_VBIF_CTRL, vbif | 0x7);
++	}
++
+ 	dsi_write(msm_host, REG_DSI_DMA_BASE, dma_base);
+ 	dsi_write(msm_host, REG_DSI_DMA_LEN, len);
+ 	dsi_write(msm_host, REG_DSI_TRIG_DMA, 1);
+@@ -2668,6 +2693,94 @@ int msm_dsi_host_power_off(struct mipi_dsi_host *host)
+ 	return 0;
+ }
+ 
++bool msm_dsi_host_can_dfps(struct mipi_dsi_host *host, bool is_bonded_dsi,
++			   const struct drm_display_mode *old_mode,
++			   const struct drm_display_mode *new_mode)
++{
++	struct msm_dsi_host *msm_host = to_msm_dsi_host(host);
++	unsigned long old_pclk, new_pclk, delta;
++
++	if (!msm_host || !msm_host->enabled || !msm_host->ctrl_base)
++		return false;
++	if (!(msm_host->mode_flags & MIPI_DSI_MODE_VIDEO))
++		return false;
++	if (!msm_dsi_host_version_geq(msm_host, MSM_DSI_VER_MAJOR_6G,
++				      MSM_DSI_6G_VER_MINOR_V2_8_0))
++		return false;
++	if (!(dsi_read(msm_host, REG_DSI_CTRL) & DSI_CTRL_ENABLE))
++		return false;
++	if (old_mode->hdisplay != new_mode->hdisplay ||
++	    old_mode->vdisplay != new_mode->vdisplay ||
++	    old_mode->flags != new_mode->flags ||
++	    drm_mode_equal(old_mode, new_mode))
++		return false;
++
++	/*
++	 * Seamless video-mode timing updates reuse the running DSI PHY PLL
++	 * and pixel/byte clocks without teardown. Require the compressed link
++	 * clock of the two modes to match within 0.5%.
++	 */
++	old_pclk = dsi_get_pclk_rate(old_mode, msm_host->dsc, is_bonded_dsi);
++	new_pclk = dsi_get_pclk_rate(new_mode, msm_host->dsc, is_bonded_dsi);
++	if (!old_pclk || !new_pclk)
++		return false;
++	delta = old_pclk > new_pclk ? old_pclk - new_pclk : new_pclk - old_pclk;
++	return delta * 200 <= old_pclk;
++}
++
++void msm_dsi_host_dfps_timing_update(struct mipi_dsi_host *host,
++				     bool is_bonded_dsi,
++				     const struct drm_display_mode *mode)
++{
++	struct msm_dsi_host *msm_host = to_msm_dsi_host(host);
++	u32 h_total = mode->htotal;
++	u32 v_total = mode->vtotal;
++	u32 hs_end = mode->hsync_end - mode->hsync_start;
++	u32 vs_end = mode->vsync_end - mode->vsync_start;
++	u32 ha_start = h_total - mode->hsync_start;
++	u32 ha_end = ha_start + mode->hdisplay;
++	u32 va_start = v_total - mode->vsync_start;
++	u32 va_end = va_start + mode->vdisplay;
++	u32 hdisplay = mode->hdisplay;
++	bool wide_bus_enabled = msm_dsi_host_is_wide_bus_enabled(host);
++
++	msm_dsi_host_set_display_mode(host, mode);
++
++	if (is_bonded_dsi) {
++		h_total /= 2;
++		hs_end /= 2;
++		ha_start /= 2;
++		ha_end /= 2;
++		hdisplay /= 2;
++	}
++
++	if (msm_host->dsc) {
++		u32 bits_per_pclk = wide_bus_enabled ?
++			msm_host->dsc->bits_per_component * 3 : 24;
++
++		h_total -= hdisplay;
++		hdisplay = DIV_ROUND_UP(msm_dsc_get_bytes_per_line(msm_host->dsc) * 8,
++					bits_per_pclk);
++		h_total += hdisplay;
++		ha_end = ha_start + hdisplay;
++	}
++
++	dsi_write(msm_host, REG_DSI_TIMING_DB_MODE, 1);
++	dsi_write(msm_host, REG_DSI_ACTIVE_H,
++		  DSI_ACTIVE_H_START(ha_start) | DSI_ACTIVE_H_END(ha_end));
++	dsi_write(msm_host, REG_DSI_ACTIVE_V,
++		  DSI_ACTIVE_V_START(va_start) | DSI_ACTIVE_V_END(va_end));
++	dsi_write(msm_host, REG_DSI_TOTAL,
++		  DSI_TOTAL_H_TOTAL(h_total - 1) | DSI_TOTAL_V_TOTAL(v_total - 1));
++	dsi_write(msm_host, REG_DSI_ACTIVE_HSYNC,
++		  DSI_ACTIVE_HSYNC_START(0) | DSI_ACTIVE_HSYNC_END(hs_end));
++	dsi_write(msm_host, REG_DSI_ACTIVE_VSYNC_HPOS, 0);
++	dsi_write(msm_host, REG_DSI_ACTIVE_VSYNC_VPOS,
++		  DSI_ACTIVE_VSYNC_VPOS_START(0) | DSI_ACTIVE_VSYNC_VPOS_END(vs_end));
++	wmb();
++	dsi_write(msm_host, REG_DSI_TIMING_FLUSH, 1);
++}
++
+ int msm_dsi_host_set_display_mode(struct mipi_dsi_host *host,
+ 				  const struct drm_display_mode *mode)
+ {
+diff --git a/drivers/gpu/drm/msm/msm_drv.h b/drivers/gpu/drm/msm/msm_drv.h
+index 0d2fa49dbed..41cd12ea5c3 100644
+--- a/drivers/gpu/drm/msm/msm_drv.h
++++ b/drivers/gpu/drm/msm/msm_drv.h
+@@ -301,6 +301,11 @@ bool msm_dsi_is_cmd_mode(struct msm_dsi *msm_dsi);
+ bool msm_dsi_is_bonded_dsi(struct msm_dsi *msm_dsi);
+ bool msm_dsi_is_master_dsi(struct msm_dsi *msm_dsi);
+ bool msm_dsi_wide_bus_enabled(struct msm_dsi *msm_dsi);
++bool msm_dsi_can_dfps(struct msm_dsi *msm_dsi,
++		      const struct drm_display_mode *old_mode,
++		      const struct drm_display_mode *new_mode);
++void msm_dsi_dfps_timing_update(struct msm_dsi *msm_dsi,
++				const struct drm_display_mode *mode);
+ struct drm_dsc_config *msm_dsi_get_dsc_config(struct msm_dsi *msm_dsi);
+ const char *msm_dsi_get_te_source(struct msm_dsi *msm_dsi);
+ #else
+@@ -335,6 +340,16 @@ static inline bool msm_dsi_wide_bus_enabled(struct msm_dsi *msm_dsi)
+ {
+ 	return false;
+ }
++static inline bool msm_dsi_can_dfps(struct msm_dsi *msm_dsi,
++				    const struct drm_display_mode *old_mode,
++				    const struct drm_display_mode *new_mode)
++{
++	return false;
++}
++static inline void msm_dsi_dfps_timing_update(struct msm_dsi *msm_dsi,
++					      const struct drm_display_mode *mode)
++{
++}
+ 
+ static inline struct drm_dsc_config *msm_dsi_get_dsc_config(struct msm_dsi *msm_dsi)
+ {
+diff --git a/drivers/gpu/drm/msm/msm_iommu.c b/drivers/gpu/drm/msm/msm_iommu.c
+index da6782fca6b..47b058e39be 100644
+--- a/drivers/gpu/drm/msm/msm_iommu.c
++++ b/drivers/gpu/drm/msm/msm_iommu.c
+@@ -732,6 +732,30 @@ static const struct msm_mmu_funcs funcs = {
+ 		.set_stall = msm_iommu_set_stall,
+ };
+ 
++/* Preserve firmware's active scanout direct-mapped regions across attach. */
++static int msm_iommu_map_direct_regions(struct iommu_domain *domain,
++					struct device *dev)
++{
++	struct iommu_resv_region *region;
++	LIST_HEAD(regions);
++	int ret = 0;
++
++	iommu_get_resv_regions(dev, &regions);
++	list_for_each_entry(region, &regions, list) {
++		if (region->type != IOMMU_RESV_DIRECT &&
++		    region->type != IOMMU_RESV_DIRECT_RELAXABLE)
++			continue;
++		ret = iommu_map(domain, region->start, region->start,
++				region->length, region->prot, GFP_KERNEL);
++		if (ret)
++			break;
++		dev_info(dev, "preserved direct scanout IOVA %pa size %zu\n",
++			 &region->start, region->length);
++	}
++	iommu_put_resv_regions(dev, &regions);
++	return ret;
++}
++
+ struct msm_mmu *msm_iommu_new(struct device *dev, unsigned long quirks)
+ {
+ 	struct iommu_domain *domain;
+@@ -772,6 +796,11 @@ struct msm_mmu *msm_iommu_new(struct device *dev, unsigned long quirks)
+ 	}
+ 
+ 	ret = iommu_attach_device(iommu->domain, dev);
++	if (!ret) {
++		ret = msm_iommu_map_direct_regions(iommu->domain, dev);
++		if (ret)
++			iommu_detach_device(iommu->domain, dev);
++	}
+ 	if (ret) {
+ 		iommu_domain_free(domain);
+ 		kfree(iommu);
+diff --git a/drivers/gpu/drm/msm/msm_kms.c b/drivers/gpu/drm/msm/msm_kms.c
+index 733e1ca192e..3363656a939 100644
+--- a/drivers/gpu/drm/msm/msm_kms.c
++++ b/drivers/gpu/drm/msm/msm_kms.c
+@@ -6,6 +6,7 @@
+  */
+ 
+ #include <linux/aperture.h>
++#include <linux/iommu.h>
+ #include <linux/kthread.h>
+ #include <linux/sched/mm.h>
+ #include <uapi/linux/sched/types.h>
+@@ -185,6 +186,10 @@ struct drm_gpuvm *msm_kms_init_vm(struct drm_device *dev, struct device *mdss_de
+ 	struct msm_drm_private *priv = dev->dev_private;
+ 	struct msm_kms *kms = priv->kms;
+ 	struct device *iommu_dev;
++	struct iommu_resv_region *region;
++	LIST_HEAD(regions);
++	u64 va_start = 0x1000, va_size = 0, cursor = 0x1000;
++	const u64 va_limit = 0x100000000ULL;
+ 
+ 	/*
+ 	 * IOMMUs can be a part of MDSS device tree binding, or the
+@@ -203,8 +208,46 @@ struct drm_gpuvm *msm_kms_init_vm(struct drm_device *dev, struct device *mdss_de
+ 	if (IS_ERR(mmu))
+ 		return ERR_CAST(mmu);
+ 
+-	vm = msm_gem_vm_create(dev, mmu, "mdp_kms",
+-			       0x1000, 0x100000000 - 0x1000, true);
++	/*
++	 * Select the largest unreserved 32-bit IOVA aperture so both the MSI
++	 * window and any direct-mapped bootloader scanout stay outside the
++	 * KMS allocator.
++	 */
++	iommu_get_resv_regions(iommu_dev, &regions);
++	while (cursor < va_limit) {
++		u64 next = va_limit, blocked_end = cursor;
++
++		list_for_each_entry(region, &regions, list) {
++			u64 end;
++
++			if (!region->length || region->start >= va_limit)
++				continue;
++			end = region->start + min_t(u64, region->length,
++						    va_limit - region->start);
++			if (end <= cursor)
++				continue;
++			if (region->start <= cursor)
++				blocked_end = max(blocked_end, end);
++			else
++				next = min_t(u64, next, region->start);
++		}
++		if (blocked_end > cursor) {
++			cursor = blocked_end;
++			continue;
++		}
++		if (next - cursor > va_size) {
++			va_start = cursor;
++			va_size = next - cursor;
++		}
++		cursor = next;
++	}
++	iommu_put_resv_regions(iommu_dev, &regions);
++	if (!va_size) {
++		mmu->funcs->destroy(mmu);
++		return ERR_PTR(-ENOSPC);
++	}
++	drm_info(dev, "KMS IOVA aperture %#llx+%#llx\n", va_start, va_size);
++	vm = msm_gem_vm_create(dev, mmu, "mdp_kms", va_start, va_size, true);
+ 	if (IS_ERR(vm)) {
+ 		dev_err(mdp_dev, "vm create, error %pe\n", vm);
+ 		mmu->funcs->destroy(mmu);
+diff --git a/drivers/gpu/drm/msm/registers/display/dsi.xml b/drivers/gpu/drm/msm/registers/display/dsi.xml
+index 37655b69a91..2aba0cca2e2 100644
+--- a/drivers/gpu/drm/msm/registers/display/dsi.xml
++++ b/drivers/gpu/drm/msm/registers/display/dsi.xml
+@@ -363,10 +363,13 @@ xsi:schemaLocation="https://gitlab.freedesktop.org/freedreno/ rules-fd.xsd">
+ 		<bitfield name="VIRTUAL_CHANNEL" low="8" high="9" type="uint"/>
+ 		<bitfield name="WORD_COUNT" low="16" high="31" type="uint"/>
+ 	</reg32>
++	<reg32 offset="0x001c8" name="VBIF_CTRL"/>
+ 	<reg32 offset="0x001d0" name="RDBK_DATA_CTRL">
+ 		<bitfield name="COUNT" low="16" high="23" type="uint"/>
+ 		<bitfield name="CLR" pos="0" type="boolean"/>
+ 	</reg32>
++	<reg32 offset="0x001e0" name="TIMING_FLUSH"/>
++	<reg32 offset="0x001e4" name="TIMING_DB_MODE"/>
+ 	<reg32 offset="0x001f0" name="VERSION">
+ 		<bitfield name="MAJOR" low="24" high="31" type="uint"/>
+ 	</reg32>

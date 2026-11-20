@@ -1,0 +1,398 @@
+From dfe3210e2718655219c0a956efdbc3061d629387 Mon Sep 17 00:00:00 2001
+From: TB378FC Maintainer <maintainer@tb378fc.local>
+Date: Fri, 20 Nov 2026 19:39:19 +0800
+Subject: [PATCH] display: add TB378FC panel bias regulator and dual AW99706B
+ backlight
+
+Add the board-specific paired ENP/ENN LCD bias regulator and dual-I2C
+AW99706B backlight drivers used by Lenovo TB378FC.
+---
+ drivers/regulator/Kconfig                  |   8 +
+ drivers/regulator/Makefile                 |   1 +
+ drivers/regulator/tb378fc-panel-bias.c     | 144 ++++++++++++++++++
+ drivers/video/backlight/Kconfig            |   8 +
+ drivers/video/backlight/Makefile           |   1 +
+ drivers/video/backlight/tb378fc-aw99706b.c | 167 +++++++++++++++++++++
+ 6 files changed, 329 insertions(+)
+ create mode 100644 drivers/regulator/tb378fc-panel-bias.c
+ create mode 100644 drivers/video/backlight/tb378fc-aw99706b.c
+
+diff --git a/drivers/regulator/Kconfig b/drivers/regulator/Kconfig
+index 83a76b78e58..d6121c60ab5 100644
+--- a/drivers/regulator/Kconfig
++++ b/drivers/regulator/Kconfig
+@@ -1916,4 +1916,12 @@ config REGULATOR_QCOM_LABIBB
+ 	  boost regulator and IBB can be used as a negative boost regulator
+ 	  for LCD display panel.
+ 
++config REGULATOR_TB378FC_BIAS
++	tristate "Lenovo TB378FC paired LCD bias"
++	depends on I2C && GPIOLIB && OF
++	select REGMAP_I2C
++	help
++	  Coupled ENP/ENN sequencing and native LCD bias register settings
++	  for Lenovo Xiaoxin Pad Pro GT 13 (TB378FC).
++
+ endif
+diff --git a/drivers/regulator/Makefile b/drivers/regulator/Makefile
+index 6aabcc54382..3dab35a6927 100644
+--- a/drivers/regulator/Makefile
++++ b/drivers/regulator/Makefile
+@@ -220,5 +220,6 @@ obj-$(CONFIG_REGULATOR_WM831X) += wm831x-ldo.o
+ obj-$(CONFIG_REGULATOR_WM8350) += wm8350-regulator.o
+ obj-$(CONFIG_REGULATOR_WM8400) += wm8400-regulator.o
+ obj-$(CONFIG_REGULATOR_WM8994) += wm8994-regulator.o
++obj-$(CONFIG_REGULATOR_TB378FC_BIAS) += tb378fc-panel-bias.o
+ 
+ ccflags-$(CONFIG_REGULATOR_DEBUG) += -DDEBUG
+diff --git a/drivers/regulator/tb378fc-panel-bias.c b/drivers/regulator/tb378fc-panel-bias.c
+new file mode 100644
+index 00000000000..2a00a3cf165
+--- /dev/null
++++ b/drivers/regulator/tb378fc-panel-bias.c
+@@ -0,0 +1,144 @@
++// SPDX-License-Identifier: GPL-2.0-only
++/* TB378FC LCD bias: board-specific because the vendor names the IC only "bias".
++ * Register values and GPIO order come from this unit's msm_drm.ko bias_enable().
++ * Do not identify it as TPS65132: the vendor writes control register 0x02.
++ */
++#include <linux/delay.h>
++#include <linux/gpio/consumer.h>
++#include <linux/i2c.h>
++#include <linux/module.h>
++#include <linux/regmap.h>
++#include <linux/regulator/driver.h>
++#include <linux/regulator/of_regulator.h>
++
++struct tb378fc_bias {
++	struct regmap *regmap;
++	struct gpio_desc *positive;
++	struct gpio_desc *negative;
++};
++
++static const struct reg_sequence tb378fc_bias_init[] = {
++	{ 0x00, 0x13 }, { 0x01, 0x13 }, { 0x02, 0x33 },
++};
++
++static int tb378fc_bias_enable(struct regulator_dev *rdev)
++{
++	struct tb378fc_bias *bias = rdev_get_drvdata(rdev);
++	int ret;
++
++	ret = regmap_multi_reg_write(bias->regmap, tb378fc_bias_init,
++				     ARRAY_SIZE(tb378fc_bias_init));
++	if (ret)
++		return ret;
++	ret = gpiod_direction_output(bias->positive, 1);
++	if (ret)
++		return ret;
++	/* The vendor repeats the configuration after asserting ENP. */
++	ret = regmap_multi_reg_write(bias->regmap, tb378fc_bias_init,
++				     ARRAY_SIZE(tb378fc_bias_init));
++	if (ret)
++		goto fail;
++	msleep(5);
++	ret = gpiod_direction_output(bias->negative, 1);
++	if (!ret)
++		return 0;
++fail:
++	gpiod_direction_output(bias->negative, 0);
++	gpiod_direction_output(bias->positive, 0);
++	return ret;
++}
++
++static int tb378fc_bias_disable(struct regulator_dev *rdev)
++{
++	struct tb378fc_bias *bias = rdev_get_drvdata(rdev);
++	int ret;
++
++	ret = gpiod_direction_output(bias->negative, 0);
++	if (ret)
++		return ret;
++	msleep(5);
++	return gpiod_direction_output(bias->positive, 0);
++}
++
++static int tb378fc_bias_is_enabled(struct regulator_dev *rdev)
++{
++	struct tb378fc_bias *bias = rdev_get_drvdata(rdev);
++	int pos = gpiod_get_value_cansleep(bias->positive);
++	int neg = gpiod_get_value_cansleep(bias->negative);
++
++	if (pos < 0)
++		return pos;
++	if (neg < 0)
++		return neg;
++	return pos && neg;
++}
++
++static const struct regulator_ops tb378fc_bias_ops = {
++	.enable = tb378fc_bias_enable,
++	.disable = tb378fc_bias_disable,
++	.is_enabled = tb378fc_bias_is_enabled,
++};
++
++static const struct regulator_desc tb378fc_bias_desc = {
++	.name = "tb378fc-panel-bias",
++	.owner = THIS_MODULE,
++	.type = REGULATOR_VOLTAGE,
++	.ops = &tb378fc_bias_ops,
++	/* One logical supply controls the positive and negative rails together.
++	 * No voltage programming API: keep the vendor's exact register values.
++	 */
++};
++
++static const struct regmap_config tb378fc_bias_regmap = {
++	.reg_bits = 8,
++	.val_bits = 8,
++	.max_register = 0x02,
++};
++
++static int tb378fc_bias_probe(struct i2c_client *client)
++{
++	struct device *dev = &client->dev;
++	struct regulator_config config = {};
++	struct regulator_dev *rdev;
++	struct tb378fc_bias *bias;
++
++	bias = devm_kzalloc(dev, sizeof(*bias), GFP_KERNEL);
++	if (!bias)
++		return -ENOMEM;
++	bias->regmap = devm_regmap_init_i2c(client, &tb378fc_bias_regmap);
++	if (IS_ERR(bias->regmap))
++		return dev_err_probe(dev, PTR_ERR(bias->regmap), "regmap init failed\n");
++	/* Leave inherited rails untouched until the panel requests a transition. */
++	bias->positive = devm_gpiod_get(dev, "positive", GPIOD_ASIS);
++	if (IS_ERR(bias->positive))
++		return dev_err_probe(dev, PTR_ERR(bias->positive), "missing ENP\n");
++	bias->negative = devm_gpiod_get(dev, "negative", GPIOD_ASIS);
++	if (IS_ERR(bias->negative))
++		return dev_err_probe(dev, PTR_ERR(bias->negative), "missing ENN\n");
++	config.dev = dev;
++	config.of_node = dev->of_node;
++	config.driver_data = bias;
++	config.init_data = of_get_regulator_init_data(dev, dev->of_node,
++						    &tb378fc_bias_desc);
++	if (!config.init_data)
++		return -EINVAL;
++	rdev = devm_regulator_register(dev, &tb378fc_bias_desc, &config);
++	return PTR_ERR_OR_ZERO(rdev);
++}
++
++static const struct of_device_id tb378fc_bias_match[] = {
++	{ .compatible = "lenovo,tb378fc-panel-bias" },
++	{ }
++};
++MODULE_DEVICE_TABLE(of, tb378fc_bias_match);
++
++static struct i2c_driver tb378fc_bias_driver = {
++	.probe = tb378fc_bias_probe,
++	.driver = {
++		.name = "tb378fc-panel-bias",
++		.of_match_table = tb378fc_bias_match,
++	},
++};
++module_i2c_driver(tb378fc_bias_driver);
++MODULE_DESCRIPTION("Lenovo TB378FC paired LCD bias control");
++MODULE_LICENSE("GPL");
+diff --git a/drivers/video/backlight/Kconfig b/drivers/video/backlight/Kconfig
+index 38a8bfeac3c..c121ef8a218 100644
+--- a/drivers/video/backlight/Kconfig
++++ b/drivers/video/backlight/Kconfig
+@@ -542,6 +542,14 @@ config BACKLIGHT_LED
+ 	  If you have a LCD backlight adjustable by LED class driver, say Y
+ 	  to enable this driver.
+ 
++config BACKLIGHT_TB378FC_AW99706B
++	tristate "Lenovo TB378FC dual AW99706B backlight"
++	depends on I2C && GPIOLIB && BACKLIGHT_CLASS_DEVICE
++	select REGMAP_I2C
++	help
++	  Dual-bus AW99706B backlight controller driver with vendor register
++	  configuration for Lenovo Xiaoxin Pad Pro GT 13 (TB378FC).
++
+ endif # BACKLIGHT_CLASS_DEVICE
+ 
+ endmenu
+diff --git a/drivers/video/backlight/Makefile b/drivers/video/backlight/Makefile
+index 34469711c6c..724d55a549a 100644
+--- a/drivers/video/backlight/Makefile
++++ b/drivers/video/backlight/Makefile
+@@ -64,3 +64,4 @@ obj-$(CONFIG_BACKLIGHT_WM831X)		+= wm831x_bl.o
+ obj-$(CONFIG_BACKLIGHT_ARCXCNN) 	+= arcxcnn_bl.o
+ obj-$(CONFIG_BACKLIGHT_RAVE_SP)		+= rave-sp-backlight.o
+ obj-$(CONFIG_BACKLIGHT_LED)		+= led_bl.o
++obj-$(CONFIG_BACKLIGHT_TB378FC_AW99706B)	+= tb378fc-aw99706b.o
+diff --git a/drivers/video/backlight/tb378fc-aw99706b.c b/drivers/video/backlight/tb378fc-aw99706b.c
+new file mode 100644
+index 00000000000..ac1c9fa748c
+--- /dev/null
++++ b/drivers/video/backlight/tb378fc-aw99706b.c
+@@ -0,0 +1,167 @@
++// SPDX-License-Identifier: GPL-2.0-only
++/* TB378FC AW99706B: preserve the board's vendor register configuration.
++ * Source: aw99706b_init_table and _bl_set_brightness in this unit's msm_drm.ko.
++ * No MTP writes and no guessed current limits.
++ */
++#include <linux/backlight.h>
++#include <linux/delay.h>
++#include <linux/gpio/consumer.h>
++#include <linux/i2c.h>
++#include <linux/module.h>
++#include <linux/mutex.h>
++#include <linux/of.h>
++#include <linux/regmap.h>
++
++struct tb378fc_bl {
++	struct regmap *regmap;
++	struct regmap *secondary;
++	struct gpio_desc *enable;
++	struct mutex lock;
++	bool on;
++};
++
++static int tb378fc_bl_write(struct tb378fc_bl *ctx, unsigned int reg,
++			   unsigned int value)
++{
++	int ret = regmap_write(ctx->regmap, reg, value);
++
++	if (!ret)
++		ret = regmap_write(ctx->secondary, reg, value);
++	return ret;
++}
++
++static const struct reg_sequence tb378fc_bl_init[] = {
++	{ 0x0d, 0x00 }, { 0x0c, 0x48 }, { 0x06, 0xd9 }, { 0x07, 0x05 },
++	{ 0x04, 0x00 }, { 0x05, 0x00 }, { 0x08, 0x01 }, { 0x0d, 0xfe },
++};
++
++static int tb378fc_bl_update(struct backlight_device *bl)
++{
++	struct tb378fc_bl *ctx = bl_get_data(bl);
++	unsigned int brightness = backlight_get_brightness(bl);
++	int ret = 0;
++
++	mutex_lock(&ctx->lock);
++	if (!brightness) {
++		if (ctx->on)
++			ret = tb378fc_bl_write(ctx, 0x0d, 0x00);
++		gpiod_direction_output(ctx->enable, 0);
++		ctx->on = false;
++		goto out;
++	}
++	if (!ctx->on) {
++		ret = gpiod_direction_output(ctx->enable, 1);
++		if (ret)
++			goto out;
++		usleep_range(5000, 6000);
++		ret = regmap_multi_reg_write(ctx->regmap, tb378fc_bl_init,
++					    ARRAY_SIZE(tb378fc_bl_init));
++		if (ret)
++			goto disable;
++		ret = regmap_multi_reg_write(ctx->secondary, tb378fc_bl_init,
++					    ARRAY_SIZE(tb378fc_bl_init));
++		if (ret)
++			goto disable;
++		ctx->on = true;
++	}
++	ret = tb378fc_bl_write(ctx, 0x04, (brightness >> 8) & 0x0f);
++	if (ret)
++		goto disable;
++	ret = tb378fc_bl_write(ctx, 0x05, brightness & 0xff);
++	if (!ret)
++		goto out;
++disable:
++	gpiod_direction_output(ctx->enable, 0);
++	ctx->on = false;
++out:
++	mutex_unlock(&ctx->lock);
++	return ret;
++}
++
++static const struct backlight_ops tb378fc_bl_ops = {
++	.options = BL_CORE_SUSPENDRESUME,
++	.update_status = tb378fc_bl_update,
++};
++
++static const struct regmap_config tb378fc_bl_regmap = {
++	.reg_bits = 8,
++	.val_bits = 8,
++	/* Registers 0x1e/0x1f control MTP. Keep them inaccessible. */
++	.max_register = 0x13,
++};
++
++static int tb378fc_bl_probe(struct i2c_client *client)
++{
++	struct device *dev = &client->dev;
++	struct backlight_properties props = {
++		.type = BACKLIGHT_RAW,
++		.max_brightness = 4095,
++		.brightness = 906,
++		.power = BACKLIGHT_POWER_OFF,
++	};
++	struct backlight_device *bl;
++	struct tb378fc_bl *ctx;
++	struct device_node *secondary_bus;
++	struct i2c_adapter *adapter;
++	struct i2c_client *secondary;
++	unsigned int id;
++	int ret;
++
++	ctx = devm_kzalloc(dev, sizeof(*ctx), GFP_KERNEL);
++	if (!ctx)
++		return -ENOMEM;
++	mutex_init(&ctx->lock);
++	ctx->regmap = devm_regmap_init_i2c(client, &tb378fc_bl_regmap);
++	if (IS_ERR(ctx->regmap))
++		return dev_err_probe(dev, PTR_ERR(ctx->regmap), "regmap init failed\n");
++	/* Native DT: primary 888000:76, secondary 880000:76; shared HWEN. */
++	secondary_bus = of_parse_phandle(dev->of_node, "lenovo,secondary-i2c-bus", 0);
++	if (!secondary_bus)
++		return dev_err_probe(dev, -EINVAL, "missing secondary backlight bus\n");
++	adapter = of_find_i2c_adapter_by_node(secondary_bus);
++	of_node_put(secondary_bus);
++	if (!adapter)
++		return dev_err_probe(dev, -EPROBE_DEFER, "secondary bus not ready\n");
++	secondary = devm_i2c_new_dummy_device(dev, adapter, 0x76);
++	i2c_put_adapter(adapter);
++	if (IS_ERR(secondary))
++		return dev_err_probe(dev, PTR_ERR(secondary), "secondary client failed\n");
++	ctx->secondary = devm_regmap_init_i2c(secondary, &tb378fc_bl_regmap);
++	if (IS_ERR(ctx->secondary))
++		return dev_err_probe(dev, PTR_ERR(ctx->secondary), "secondary regmap failed\n");
++	ctx->enable = devm_gpiod_get(dev, "enable", GPIOD_ASIS);
++	if (IS_ERR(ctx->enable))
++		return dev_err_probe(dev, PTR_ERR(ctx->enable), "missing HWEN\n");
++	/* UEFI has already enabled HWEN. Reading ID does not alter its setup. */
++	ret = regmap_read(ctx->regmap, 0x11, &id);
++	if (ret)
++		return dev_err_probe(dev, ret, "chip ID read failed\n");
++	if (id != 0x07)
++		return dev_err_probe(dev, -ENODEV, "unexpected chip ID %02x\n", id);
++	ret = regmap_read(ctx->secondary, 0x11, &id);
++	if (ret)
++		return dev_err_probe(dev, ret, "secondary chip ID read failed\n");
++	if (id != 0x07)
++		return dev_err_probe(dev, -ENODEV, "unexpected secondary ID %02x\n", id);
++	dev_info(dev, "TB378FC_DUAL_BACKLIGHT both chip IDs verified\n");
++	bl = devm_backlight_device_register(dev, "tb378fc-backlight", dev,
++					   ctx, &tb378fc_bl_ops, &props);
++	return PTR_ERR_OR_ZERO(bl);
++}
++
++static const struct of_device_id tb378fc_bl_match[] = {
++	{ .compatible = "lenovo,tb378fc-aw99706b" },
++	{ }
++};
++MODULE_DEVICE_TABLE(of, tb378fc_bl_match);
++
++static struct i2c_driver tb378fc_bl_driver = {
++	.probe = tb378fc_bl_probe,
++	.driver = {
++		.name = "tb378fc-aw99706b",
++		.of_match_table = tb378fc_bl_match,
++	},
++};
++module_i2c_driver(tb378fc_bl_driver);
++MODULE_DESCRIPTION("Lenovo TB378FC AW99706B backlight");
++MODULE_LICENSE("GPL");

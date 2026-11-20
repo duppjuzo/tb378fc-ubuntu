@@ -1,0 +1,80 @@
+From c751f1eb2430e1d70e27330d9f352428fafcef0c Mon Sep 17 00:00:00 2001
+From: TB378FC Maintainer <maintainer@tb378fc.local>
+Date: Fri, 20 Nov 2026 19:39:20 +0800
+Subject: [PATCH] Input: nt36536 - add Lenovo TB378FC variant and trim ID
+
+Add the TB378FC chip trim ID (0x15/0x23/0x65/0x03) and lenovo,tb378fc-nvt
+variant with native stylus pressure ceiling (4095) and strict chip-ID
+validation scoped only to TB378FC.
+---
+ drivers/input/touchscreen/nt36536/nt36536.c         | 13 +++++++++++++
+ drivers/input/touchscreen/nt36536/nt36536.h         |  1 +
+ drivers/input/touchscreen/nt36536/nt36536_mem_map.h |  3 +++
+ 3 files changed, 17 insertions(+)
+
+diff --git a/drivers/input/touchscreen/nt36536/nt36536.c b/drivers/input/touchscreen/nt36536/nt36536.c
+index aec5437bc89..83dd31a1f33 100644
+--- a/drivers/input/touchscreen/nt36536/nt36536.c
++++ b/drivers/input/touchscreen/nt36536/nt36536.c
+@@ -1120,6 +1120,10 @@ static int8_t nvt_ts_check_chip_ver_trim(void)
+ 
+ matched:
+ 	if (!entry) {
++		if (ts->variant && ts->variant->refuse_unknown_id) {
++			NVT_ERR("unknown touch chip id: refusing firmware download\n");
++			return -ENODEV;
++		}
+ 		NVT_ERR("chip id not in trim table, continue with NT36536 maps\n");
+ 		entry = &trim_id_table[0];
+ 	}
+@@ -2234,8 +2238,16 @@ static const struct nvt_ts_variant nt36536_variant = {
+ 	.pen_pressure_max = 16384,
+ };
+ 
++/* Lenovo TB378FC: pen coordinates x10, pressure 0..4095, strict chip ID check. */
++static const struct nvt_ts_variant tb378fc_variant = {
++	.pen_coord_scale = 10,
++	.pen_pressure_max = 4095,
++	.refuse_unknown_id = true,
++};
++
+ static const struct spi_device_id nvt_ts_id[] = {
+ 	{ "nt36536-ts", (kernel_ulong_t)&nt36536_variant },
++	{ "tb378fc-nvt", (kernel_ulong_t)&tb378fc_variant },
+ 	{ }
+ };
+ MODULE_DEVICE_TABLE(spi, nvt_ts_id);
+@@ -2243,6 +2255,7 @@ MODULE_DEVICE_TABLE(spi, nvt_ts_id);
+ #ifdef CONFIG_OF
+ static const struct of_device_id nt36536_of_match[] = {
+ 	{ .compatible = "novatek,nt36536-ts", .data = &nt36536_variant },
++	{ .compatible = "lenovo,tb378fc-nvt", .data = &tb378fc_variant },
+ 	{ },
+ };
+ MODULE_DEVICE_TABLE(of, nt36536_of_match);
+diff --git a/drivers/input/touchscreen/nt36536/nt36536.h b/drivers/input/touchscreen/nt36536/nt36536.h
+index 404a0a175a7..ebad44bc909 100644
+--- a/drivers/input/touchscreen/nt36536/nt36536.h
++++ b/drivers/input/touchscreen/nt36536/nt36536.h
+@@ -105,6 +105,7 @@ struct nvt_ts_variant {
+ 	/* pen report units per touchscreen-size unit (panel pixel) */
+ 	unsigned int pen_coord_scale;
+ 	unsigned int pen_pressure_max;
++	bool refuse_unknown_id;
+ };
+ 
+ enum nvt_ic_state {
+diff --git a/drivers/input/touchscreen/nt36536/nt36536_mem_map.h b/drivers/input/touchscreen/nt36536/nt36536_mem_map.h
+index dd72e83541d..2bd1a1e4027 100644
+--- a/drivers/input/touchscreen/nt36536/nt36536_mem_map.h
++++ b/drivers/input/touchscreen/nt36536/nt36536_mem_map.h
+@@ -386,6 +386,9 @@ static const struct nvt_ts_trim_id_table trim_id_table[] __maybe_unused = {
+ 		.mmap = &NT36536_single_memory_map, .mmap_casc = &NT36536_cascade_memory_map, .hwinfo = &NT36536_hw_info},
+ 	{.id = {0x15, 0x0E, 0xFF, 0x23, 0x65, 0x03}, .mask = {1, 1, 0, 1, 1, 1},
+ 		.mmap = &NT36536_single_memory_map, .mmap_casc = &NT36536_cascade_memory_map, .hwinfo = &NT36536_hw_info},
++	/* Lenovo TB378FC native touch IC trim revision */
++	{.id = {0x15, 0xFF, 0xFF, 0x23, 0x65, 0x03}, .mask = {1, 0, 0, 1, 1, 1},
++		.mmap = &NT36536_single_memory_map, .mmap_casc = &NT36536_cascade_memory_map, .hwinfo = &NT36536_hw_info},
+ 	{.id = {0xFF, 0xFF, 0xFF, 0x32, 0x65, 0x03}, .mask = {0, 0, 0, 1, 1, 1},
+ 		.mmap = &NT36532_single_memory_map, .mmap_casc = &NT36532_cascade_memory_map, .hwinfo = &NT36532_hw_info},
+ };

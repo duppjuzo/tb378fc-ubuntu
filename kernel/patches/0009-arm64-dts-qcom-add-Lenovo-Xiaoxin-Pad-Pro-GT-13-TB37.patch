@@ -1,0 +1,1811 @@
+From 1aeea96cd1319fb6b1ecd7d3c0743b57b58d20ff Mon Sep 17 00:00:00 2001
+From: TB378FC Maintainer <maintainer@tb378fc.local>
+Date: Fri, 20 Nov 2026 19:39:20 +0800
+Subject: [PATCH] arm64: dts: qcom: add Lenovo Xiaoxin Pad Pro GT 13 (TB378FC)
+
+Add the unified Linux 7.4 devicetree for Lenovo Xiaoxin Pad Pro GT 13
+(TB378FC), integrating display, touch, UFS, quad AW88480 speakers,
+WCD9390 SoundWire mic/USBSS, WCN7860 Wi-Fi/BT, Iris VPU, PM8550 flash,
+dual CAMSS cameras on standalone CSI-2 PHYs, SM8750P 118C passive CPU
+thermal zones, ABL root identity restore, and 8GB-safe ramoops.
+---
+ arch/arm64/boot/dts/qcom/Makefile             |    1 +
+ .../qcom/sm8750-lenovo-tb378fc-camera.dtsi    |  220 +++
+ .../boot/dts/qcom/sm8750-lenovo-tb378fc.dts   | 1549 +++++++++++++++++
+ 3 files changed, 1770 insertions(+)
+ create mode 100644 arch/arm64/boot/dts/qcom/sm8750-lenovo-tb378fc-camera.dtsi
+ create mode 100644 arch/arm64/boot/dts/qcom/sm8750-lenovo-tb378fc.dts
+
+diff --git a/arch/arm64/boot/dts/qcom/Makefile b/arch/arm64/boot/dts/qcom/Makefile
+index 1beaeb54edf..679ee591d90 100644
+--- a/arch/arm64/boot/dts/qcom/Makefile
++++ b/arch/arm64/boot/dts/qcom/Makefile
+@@ -454,6 +454,7 @@ dtb-$(CONFIG_ARCH_QCOM)	+= sm8650-mtp.dtb
+ dtb-$(CONFIG_ARCH_QCOM)	+= sm8650-qrd.dtb
+ dtb-$(CONFIG_ARCH_QCOM)	+= sm8650-valve-deckard.dtb
+ dtb-$(CONFIG_ARCH_QCOM)	+= sm8750-erhai.dtb
++dtb-$(CONFIG_ARCH_QCOM)	+= sm8750-lenovo-tb378fc.dtb
+ dtb-$(CONFIG_ARCH_QCOM)	+= sm8750-mtp.dtb
+ dtb-$(CONFIG_ARCH_QCOM)	+= sm8750-qrd.dtb
+ dtb-$(CONFIG_ARCH_QCOM)	+= sm8750-xiaomi-piano-desktop.dtb
+diff --git a/arch/arm64/boot/dts/qcom/sm8750-lenovo-tb378fc-camera.dtsi b/arch/arm64/boot/dts/qcom/sm8750-lenovo-tb378fc-camera.dtsi
+new file mode 100644
+index 00000000000..fc83d622c0f
+--- /dev/null
++++ b/arch/arm64/boot/dts/qcom/sm8750-lenovo-tb378fc-camera.dtsi
+@@ -0,0 +1,220 @@
++// SPDX-License-Identifier: BSD-3-Clause
++/*
++ * Lenovo TB378FC dual camera subsystem (GC08A8 front + OV13B10 rear),
++ * wired onto the Linux 7.4 SM8750 standalone CSI-2 PHY graph.
++ */
++
++#include <dt-bindings/clock/qcom,sm8750-cambistmclkcc.h>
++#include <dt-bindings/clock/qcom,sm8750-camcc.h>
++
++&tlmm {
++	tb378fc_cam_front: tb378fc-cam-front-state {
++		reset-pins {
++			pins = "gpio7";
++			function = "gpio";
++			drive-strength = <2>;
++			bias-disable;
++		};
++
++		mclk-pins {
++			pins = "gpio93";
++			function = "cam_aon_mclk4";
++			drive-strength = <2>;
++			bias-disable;
++		};
++	};
++
++	tb378fc_cam_rear: tb378fc-cam-rear-state {
++		reset-pins {
++			pins = "gpio11";
++			function = "gpio";
++			drive-strength = <2>;
++			bias-disable;
++		};
++
++		mclk-pins {
++			pins = "gpio92";
++			function = "cam_mclk";
++			drive-strength = <2>;
++			bias-disable;
++		};
++	};
++
++	tb378fc_cam_cci0: tb378fc-cam-cci0-state {
++		scl-pins {
++			pins = "gpio114";
++			function = "cci_i2c_scl";
++			drive-strength = <2>;
++			bias-pull-up;
++		};
++
++		sda-pins {
++			pins = "gpio113";
++			function = "cci_i2c_sda";
++			drive-strength = <2>;
++			bias-pull-up;
++		};
++	};
++
++	tb378fc_cam_cci1: tb378fc-cam-cci1-state {
++		scl-pins {
++			pins = "gpio118";
++			function = "cci_i2c_scl";
++			drive-strength = <2>;
++			bias-pull-up;
++		};
++
++		sda-pins {
++			pins = "gpio117";
++			function = "cci_i2c_sda";
++			drive-strength = <2>;
++			bias-pull-up;
++		};
++	};
++};
++
++/* Rear camera OV13B10 on CCI0 bus 0 -> CSIPHY5 */
++&cci0 {
++	pinctrl-names = "default";
++	pinctrl-0 = <&tb378fc_cam_cci0>;
++	/delete-property/ pinctrl-1;
++	assigned-clocks = <&camcc CAM_CC_CCI_0_CLK>;
++	assigned-clock-rates = <37500000>;
++	status = "okay";
++};
++
++&cci0_i2c0 {
++	clock-frequency = <400000>;
++
++	camera@36 {
++		compatible = "lenovo,tb378fc-ov13b10", "ovti,ov13b10";
++		reg = <0x36>;
++		clocks = <&cambistmclkcc CAM_BIST_MCLK_CC_MCLK3_CLK>;
++		assigned-clocks = <&cambistmclkcc CAM_BIST_MCLK_CC_MCLK3_CLK>;
++		assigned-clock-rates = <19200000>;
++		power-domains = <&camcc CAM_CC_TITAN_TOP_GDSC>;
++		reset-gpios = <&tlmm 11 GPIO_ACTIVE_LOW>;
++		pinctrl-names = "default";
++		pinctrl-0 = <&tb378fc_cam_rear>;
++		dovdd-supply = <&vreg_l10b_cam>;
++		avdd-supply = <&vreg_l8b_cam>;
++		dvdd-supply = <&vreg_l11b_cam>;
++		vaf-supply = <&vreg_l16b_cam>;
++		orientation = <1>;
++		rotation = <90>;
++
++		port {
++			cam_rear_ep: endpoint {
++				data-lanes = <1 2 3 4>;
++				link-frequencies = /bits/ 64 <560000000>;
++				remote-endpoint = <&csiphy5_in>;
++			};
++		};
++	};
++};
++
++&cci0_i2c1 {
++	status = "disabled";
++};
++
++/* Front camera GC08A8 on CCI1 bus 0 -> CSIPHY1 */
++&cci1 {
++	pinctrl-names = "default";
++	pinctrl-0 = <&tb378fc_cam_cci1>;
++	/delete-property/ pinctrl-1;
++	assigned-clocks = <&camcc CAM_CC_CCI_1_CLK>;
++	assigned-clock-rates = <37500000>;
++	status = "okay";
++};
++
++&cci1_i2c0 {
++	clock-frequency = <400000>;
++
++	camera@31 {
++		compatible = "galaxycore,gc08a8";
++		reg = <0x31>;
++		clocks = <&cambistmclkcc CAM_BIST_MCLK_CC_MCLK4_CLK>;
++		assigned-clocks = <&cambistmclkcc CAM_BIST_MCLK_CC_MCLK4_CLK>;
++		assigned-clock-rates = <19200000>;
++		power-domains = <&camcc CAM_CC_TITAN_TOP_GDSC>;
++		reset-gpios = <&tlmm 7 GPIO_ACTIVE_LOW>;
++		pinctrl-names = "default";
++		pinctrl-0 = <&tb378fc_cam_front>;
++		dovdd-supply = <&vreg_l10b_cam>;
++		avdd-supply = <&vreg_l7b_cam>;
++		dvdd-supply = <&vreg_l1i_cam>;
++		orientation = <0>;
++		rotation = <270>;
++
++		port {
++			cam_front_ep: endpoint {
++				data-lanes = <1 2 3 4>;
++				link-frequencies = /bits/ 64 <336000000>;
++				remote-endpoint = <&csiphy1_in>;
++			};
++		};
++	};
++};
++
++&cci1_i2c1 {
++	status = "disabled";
++};
++
++&camss {
++	status = "okay";
++
++	ports {
++		/delete-node/ port@0;
++		/delete-node/ port@2;
++		/delete-node/ port@3;
++		/delete-node/ port@4;
++	};
++};
++
++&csiphy0_out {
++	/delete-property/ remote-endpoint;
++};
++
++&csiphy2_out {
++	/delete-property/ remote-endpoint;
++};
++
++&csiphy3_out {
++	/delete-property/ remote-endpoint;
++};
++
++&csiphy4_out {
++	/delete-property/ remote-endpoint;
++};
++
++&csiphy1 {
++	vdda-0p9-supply = <&vreg_l1f_0p88>;
++	vdda-1p2-supply = <&vreg_l3g>;
++	status = "okay";
++};
++
++&csiphy1_in {
++	bus-type = <4>;
++	data-lanes = <1 2 3 4>;
++	remote-endpoint = <&cam_front_ep>;
++};
++
++&csiphy5 {
++	vdda-0p9-supply = <&vreg_l1f_0p88>;
++	vdda-1p2-supply = <&vreg_l3g>;
++	status = "okay";
++};
++
++&csiphy5_in {
++	bus-type = <4>;
++	data-lanes = <1 2 3 4>;
++	remote-endpoint = <&cam_rear_ep>;
++};
++
++&camss_csiphy1_in {
++	data-lanes = <1 2 3 4>;
++};
++
++&camss_csiphy5_in {
++	data-lanes = <1 2 3 4>;
++};
+diff --git a/arch/arm64/boot/dts/qcom/sm8750-lenovo-tb378fc.dts b/arch/arm64/boot/dts/qcom/sm8750-lenovo-tb378fc.dts
+new file mode 100644
+index 00000000000..2c0e4bef272
+--- /dev/null
++++ b/arch/arm64/boot/dts/qcom/sm8750-lenovo-tb378fc.dts
+@@ -0,0 +1,1549 @@
++// SPDX-License-Identifier: BSD-3-Clause
++/*
++ * Lenovo Xiaoxin Pad Pro GT 13 (TB378FC) - Qualcomm SM8750P mainline board DTS.
++ *
++ * Unified board definition for Linux 7.4+ (sm8750/v7.4-dev), integrating:
++ *  - Display: CSOT NT36526 3504x2190 dual-DSI/DSC panel, paired bias, dual AW99706B
++ *  - Touch: Novatek NT36536 SPI TDDI (rising-edge IRQ, inverted X + swapped XY)
++ *  - Storage: Built-in UFS PHY/HBA and RPMH rails (no runtime DT overlay)
++ *  - Audio: Quad AW88480 speaker amps on GPIO-I2C + WCD9390 SoundWire mic/codec
++ *  - Connectivity: WCN7860 PCIe Wi-Fi 7 + UART14 Bluetooth
++ *  - USB-C: Dual-role USB3 + DisplayPort Alt Mode + WCD9390 USBSS + PMIC GLINK
++ *  - Media: Iris hardware video codec + PM8550 rear flash LED + dual CAMSS cameras
++ *  - Thermal & Diagnostics: SM8750P 118C passive CPU throttling + 8GB-safe ramoops
++ */
++
++/dts-v1/;
++
++#include <dt-bindings/gpio/gpio.h>
++#include <dt-bindings/input/linux-event-codes.h>
++#include <dt-bindings/leds/common.h>
++#include <dt-bindings/regulator/qcom,rpmh-regulator.h>
++#include <dt-bindings/sound/qcom,q6afe.h>
++#include <dt-bindings/sound/qcom,q6asm.h>
++#include <dt-bindings/sound/qcom,q6dsp-lpass-ports.h>
++#include "sm8750.dtsi"
++#include "pm8550.dtsi"
++#define PMK8550VE_SID 8
++#include "pm8550ve.dtsi"
++#include "pmih0108.dtsi"
++#include "pmk8550.dtsi"
++#include "sm8750-pmics.dtsi"
++
++/delete-node/ &cpusys_vm_mem;
++
++/ {
++	model = "Lenovo Xiaoxin Pad Pro GT 13 (TB378FC)";
++	compatible = "lenovo,tb378fc", "qcom,sm8750";
++	/* Restored before core initcalls by CONFIG_QCOM_ABL_ROOT_IDENTITY after ABL DTBO. */
++	qcom,mainline-model = "Lenovo Xiaoxin Pad Pro GT 13 (TB378FC)";
++	qcom,mainline-compatible = "lenovo,tb378fc", "qcom,sm8750";
++	chassis-type = "tablet";
++
++	/* Lenovo ABL updates this existing node before entering the kernel. */
++	chosen {
++	};
++
++	reserved-memory {
++		/* Preserve UEFI active scanout across SMMU handover. */
++		tb378fc_splash: splash_region {
++			label = "cont_splash_region";
++			reg = <0x0 0xfc800000 0x0 0x2b00000>;
++			no-map;
++			iommu-addresses = <&mdss 0x0 0xfc800000 0x0 0x2b00000>;
++		};
++
++		/*
++		 * Verified 8GB-unit-safe 4 MiB ramoops region inside the unreserved
++		 * 0xb81c0000..0xd4e23000 physical gap, matching stock downstream RAM
++		 * console allocation with oops/panic dmesg capture enabled.
++		 */
++		ramoops@c2000000 {
++			compatible = "ramoops";
++			reg = <0x0 0xc2000000 0x0 0x400000>;
++			record-size = <0x20000>;
++			console-size = <0x1e0000>;
++			pmsg-size = <0x200000>;
++		};
++	};
++
++	clocks {
++		xo_board: xo-board {
++			compatible = "fixed-clock";
++			clock-frequency = <76800000>;
++			#clock-cells = <0>;
++		};
++
++		sleep_clk: sleep-clk {
++			compatible = "fixed-clock";
++			clock-frequency = <32000>;
++			#clock-cells = <0>;
++		};
++
++		bi_tcxo_div2: bi-tcxo-div2-clk {
++			compatible = "fixed-factor-clock";
++			#clock-cells = <0>;
++			clocks = <&rpmhcc RPMH_CXO_CLK>;
++			clock-mult = <1>;
++			clock-div = <2>;
++		};
++
++		bi_tcxo_ao_div2: bi-tcxo-ao-div2-clk {
++			compatible = "fixed-factor-clock";
++			#clock-cells = <0>;
++			clocks = <&rpmhcc RPMH_CXO_CLK_A>;
++			clock-mult = <1>;
++			clock-div = <2>;
++		};
++	};
++
++	vph_pwr: vph-pwr-regulator {
++		compatible = "regulator-fixed";
++		regulator-name = "vph_pwr";
++		regulator-min-microvolt = <3700000>;
++		regulator-max-microvolt = <3700000>;
++		regulator-always-on;
++		regulator-boot-on;
++	};
++
++	gpio-keys {
++		compatible = "gpio-keys";
++		pinctrl-names = "default";
++		pinctrl-0 = <&tb378fc_volume_up>;
++
++		key-volume-up {
++			label = "Volume Up";
++			linux,code = <KEY_VOLUMEUP>;
++			gpios = <&pm8550_gpios 6 GPIO_ACTIVE_LOW>;
++			debounce-interval = <15>;
++			linux,can-disable;
++			wakeup-source;
++		};
++	};
++
++	pmic-glink {
++		compatible = "lenovo,tb378fc-pmic-glink",
++			     "qcom,sm8750-pmic-glink",
++			     "qcom,sm8550-pmic-glink",
++			     "qcom,pmic-glink";
++		#address-cells = <1>;
++		#size-cells = <0>;
++
++		connector@0 {
++			compatible = "usb-c-connector";
++			reg = <0>;
++			power-role = "dual";
++			data-role = "dual";
++
++			ports {
++				#address-cells = <1>;
++				#size-cells = <0>;
++
++				port@0 {
++					reg = <0>;
++
++					pmic_glink_hs_in: endpoint {
++						remote-endpoint = <&usb_dwc3_hs>;
++					};
++				};
++
++				port@1 {
++					reg = <1>;
++
++					pmic_glink_ss_in: endpoint {
++						remote-endpoint = <&usb_dp_qmpphy_out>;
++					};
++				};
++
++				port@2 {
++					reg = <2>;
++
++					pmic_glink_sbu: endpoint {
++						remote-endpoint = <&usb_sbu_mux>;
++					};
++				};
++			};
++		};
++	};
++
++	wcn7860-pmu {
++		compatible = "qcom,wcn7860-pmu";
++		pinctrl-names = "default";
++		pinctrl-0 = <&tb378fc_wlan_en>, <&tb378fc_bt_enable>;
++
++		wlan-enable-gpios = <&tlmm 16 GPIO_ACTIVE_HIGH>;
++		bt-enable-gpios = <&pm8550ve_f_gpios 3 GPIO_ACTIVE_HIGH>;
++
++		vddio-supply = <&vreg_l3f_1p8>;
++		vddio1p2-supply = <&vreg_l2f_1p2>;
++		vddaon-supply = <&vreg_s4d_0p85>;
++		vdddig-supply = <&vreg_s5f_0p85>;
++		vddrfa1p2-supply = <&vreg_s7i>;
++		vddrfa1p8-supply = <&vreg_s3g>;
++
++		clocks = <&rpmhcc RPMH_RF_CLK1>;
++
++		regulators {
++			vreg_pmu_rfa_cmn: ldo0 {
++				regulator-name = "vreg_pmu_rfa_cmn";
++			};
++			vreg_pmu_aon_0p59: ldo1 {
++				regulator-name = "vreg_pmu_aon_0p59";
++			};
++			vreg_pmu_wlcx_0p8: ldo2 {
++				regulator-name = "vreg_pmu_wlcx_0p8";
++			};
++			vreg_pmu_wlmx_0p85: ldo3 {
++				regulator-name = "vreg_pmu_wlmx_0p85";
++			};
++			vreg_pmu_btcmx_0p85: ldo4 {
++				regulator-name = "vreg_pmu_btcmx_0p85";
++			};
++			vreg_pmu_rfa_0p8: ldo5 {
++				regulator-name = "vreg_pmu_rfa_0p8";
++			};
++			vreg_pmu_rfa_1p2: ldo6 {
++				regulator-name = "vreg_pmu_rfa_1p2";
++			};
++			vreg_pmu_rfa_1p8: ldo7 {
++				regulator-name = "vreg_pmu_rfa_1p8";
++			};
++			vreg_pmu_pcie_0p9: ldo8 {
++				regulator-name = "vreg_pmu_pcie_0p9";
++			};
++			vreg_pmu_pcie_1p8: ldo9 {
++				regulator-name = "vreg_pmu_pcie_1p8";
++			};
++		};
++	};
++
++	wcd939x: tb378fc-wcd939x {
++		compatible = "qcom,wcd9390-codec";
++		#sound-dai-cells = <1>;
++		pinctrl-names = "default";
++		pinctrl-0 = <&tb378fc_wcd_reset>;
++		reset-gpios = <&tlmm 101 GPIO_ACTIVE_LOW>;
++		vdd-rxtx-supply = <&vreg_l15b>;
++		vdd-io-supply = <&vreg_l15b>;
++		vdd-buck-supply = <&vreg_l15b>;
++		vdd-px-supply = <&vreg_l15b>;
++		vdd-mic-bias-supply = <&vreg_bob1>;
++		qcom,micbias1-microvolt = <1800000>;
++		qcom,micbias2-microvolt = <1800000>;
++		qcom,micbias3-microvolt = <1800000>;
++		qcom,micbias4-microvolt = <1800000>;
++		qcom,rx-device = <&wcd939x_rx>;
++		qcom,tx-device = <&wcd939x_tx>;
++	};
++
++	tb378fc_amp_bus: tb378fc-amp-i2c {
++		compatible = "i2c-gpio";
++		#address-cells = <1>;
++		#size-cells = <0>;
++		sda-gpios = <&tlmm 52 (GPIO_ACTIVE_HIGH | GPIO_OPEN_DRAIN)>;
++		scl-gpios = <&tlmm 53 (GPIO_ACTIVE_HIGH | GPIO_OPEN_DRAIN)>;
++		i2c-gpio,delay-us = <5>;
++		pinctrl-names = "default";
++		pinctrl-0 = <&tb378fc_gpio_i2c>, <&tb378fc_amp_resets>;
++
++		spk_amp1: amplifier@34 {
++			compatible = "awinic,aw88480";
++			reg = <0x34>;
++			#sound-dai-cells = <0>;
++			sound-name-prefix = "Amp1";
++			awinic,audio-channel = <1>;
++			reset-gpios = <&tlmm 106 GPIO_ACTIVE_LOW>;
++			firmware-name = "awinic/tb378fc/aw88480-native-music.acf";
++		};
++
++		spk_amp0: amplifier@35 {
++			compatible = "awinic,aw88480";
++			reg = <0x35>;
++			#sound-dai-cells = <0>;
++			sound-name-prefix = "Amp0";
++			awinic,audio-channel = <0>;
++			reset-gpios = <&tlmm 128 GPIO_ACTIVE_LOW>;
++			firmware-name = "awinic/tb378fc/aw88480-native-music.acf";
++		};
++
++		spk_amp2: amplifier@36 {
++			compatible = "awinic,aw88480";
++			reg = <0x36>;
++			#sound-dai-cells = <0>;
++			sound-name-prefix = "Amp2";
++			awinic,audio-channel = <2>;
++			reset-gpios = <&tlmm 120 GPIO_ACTIVE_LOW>;
++			firmware-name = "awinic/tb378fc/aw88480-native-music.acf";
++		};
++
++		spk_amp3: amplifier@37 {
++			compatible = "awinic,aw88480";
++			reg = <0x37>;
++			#sound-dai-cells = <0>;
++			sound-name-prefix = "Amp3";
++			awinic,audio-channel = <3>;
++			reset-gpios = <&tlmm 108 GPIO_ACTIVE_LOW>;
++			firmware-name = "awinic/tb378fc/aw88480-native-music.acf";
++		};
++	};
++
++	sound {
++		compatible = "qcom,sm8750-sndcard", "qcom,sm8450-sndcard";
++		model = "Lenovo-TB378FC";
++		widgets = "Speaker", "Speakers";
++		audio-routing = "Speakers", "Amp0 OUT",
++				"Speakers", "Amp1 OUT",
++				"Speakers", "Amp2 OUT",
++				"Speakers", "Amp3 OUT",
++				"AMIC1", "MIC BIAS1",
++				"AMIC4", "MIC BIAS3",
++				"TX SWR_INPUT4", "ADC1_OUTPUT",
++				"TX SWR_INPUT8", "ADC3_OUTPUT";
++		pinctrl-names = "default";
++		pinctrl-0 = <&tb378fc_sec_tdm>;
++
++		wcd-capture-dai-link {
++			link-name = "WCD Capture";
++			convert-rate = <48000>;
++			convert-channels = <2>;
++			convert-sample-format = "s16_le";
++
++			cpu {
++				sound-dai = <&q6apmbedai TX_CODEC_DMA_TX_3>;
++			};
++
++			codec {
++				sound-dai = <&wcd939x 1>, <&swr2 0>, <&lpass_txmacro 0>;
++			};
++
++			platform {
++				sound-dai = <&q6apm>;
++			};
++		};
++
++		speaker-playback-dai-link {
++			link-name = "Speaker Playback";
++			dai-format = "dsp_b";
++			convert-rate = <48000>;
++			convert-channels = <4>;
++			convert-sample-format = "s32_le";
++
++			cpu {
++				sound-dai = <&q6apmbedai SECONDARY_TDM_RX_0>;
++				dai-tdm-slot-num = <4>;
++				dai-tdm-slot-width = <32>;
++				dai-tdm-slot-rx-mask = <1 1 1 1>;
++			};
++
++			codec-0 {
++				sound-dai = <&spk_amp0>;
++				dai-tdm-slot-tx-mask = <1>;
++				dai-tdm-slot-rx-mask = <1>;
++				bitclock-inversion;
++			};
++
++			codec-1 {
++				sound-dai = <&spk_amp1>;
++				dai-tdm-slot-tx-mask = <0 1>;
++				dai-tdm-slot-rx-mask = <0 1>;
++				bitclock-inversion;
++			};
++
++			codec-2 {
++				sound-dai = <&spk_amp2>;
++				dai-tdm-slot-tx-mask = <0 0 1>;
++				dai-tdm-slot-rx-mask = <0 0 1>;
++				bitclock-inversion;
++			};
++
++			codec-3 {
++				sound-dai = <&spk_amp3>;
++				dai-tdm-slot-tx-mask = <0 0 0 1>;
++				dai-tdm-slot-rx-mask = <0 0 0 1>;
++				bitclock-inversion;
++			};
++
++			platform {
++				sound-dai = <&q6apm>;
++			};
++		};
++	};
++
++	thermal-zones {
++		/*
++		 * The stock tree pauses a CPU core when one of its two sensors
++		 * reaches 118 C and takes the core offline at 120 C (SM8750P
++		 * reaches 118 C and takes the core offline at 120 C (SM8750P
++		 * pause or hotplug cooling devices, so a passive trip at the first
++		 * of these temperatures throttles the frequency domain of the core
++		 * instead; the zones keep their 120 C hot and 125 C critical trips.
++		 */
++		cpu-0-0-0-thermal {
++			polling-delay-passive = <250>;
++
++			trips {
++				cpu_0_0_0_alert: trip-point1 {
++					temperature = <118000>;
++					hysteresis = <8000>;
++					type = "passive";
++				};
++			};
++
++			cooling-maps {
++				map0 {
++					trip = <&cpu_0_0_0_alert>;
++					cooling-device = <&cpu0 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
++							 <&cpu1 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
++							 <&cpu2 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
++							 <&cpu3 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
++							 <&cpu4 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
++							 <&cpu5 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>;
++				};
++			};
++		};
++
++		cpu-0-0-1-thermal {
++			polling-delay-passive = <250>;
++
++			trips {
++				cpu_0_0_1_alert: trip-point1 {
++					temperature = <118000>;
++					hysteresis = <8000>;
++					type = "passive";
++				};
++			};
++
++			cooling-maps {
++				map0 {
++					trip = <&cpu_0_0_1_alert>;
++					cooling-device = <&cpu0 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
++							 <&cpu1 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
++							 <&cpu2 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
++							 <&cpu3 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
++							 <&cpu4 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
++							 <&cpu5 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>;
++				};
++			};
++		};
++
++		cpu-0-1-0-thermal {
++			polling-delay-passive = <250>;
++
++			trips {
++				cpu_0_1_0_alert: trip-point1 {
++					temperature = <118000>;
++					hysteresis = <8000>;
++					type = "passive";
++				};
++			};
++
++			cooling-maps {
++				map0 {
++					trip = <&cpu_0_1_0_alert>;
++					cooling-device = <&cpu0 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
++							 <&cpu1 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
++							 <&cpu2 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
++							 <&cpu3 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
++							 <&cpu4 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
++							 <&cpu5 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>;
++				};
++			};
++		};
++
++		cpu-0-1-1-thermal {
++			polling-delay-passive = <250>;
++
++			trips {
++				cpu_0_1_1_alert: trip-point1 {
++					temperature = <118000>;
++					hysteresis = <8000>;
++					type = "passive";
++				};
++			};
++
++			cooling-maps {
++				map0 {
++					trip = <&cpu_0_1_1_alert>;
++					cooling-device = <&cpu0 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
++							 <&cpu1 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
++							 <&cpu2 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
++							 <&cpu3 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
++							 <&cpu4 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
++							 <&cpu5 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>;
++				};
++			};
++		};
++
++		cpu-0-2-0-thermal {
++			polling-delay-passive = <250>;
++
++			trips {
++				cpu_0_2_0_alert: trip-point1 {
++					temperature = <118000>;
++					hysteresis = <8000>;
++					type = "passive";
++				};
++			};
++
++			cooling-maps {
++				map0 {
++					trip = <&cpu_0_2_0_alert>;
++					cooling-device = <&cpu0 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
++							 <&cpu1 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
++							 <&cpu2 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
++							 <&cpu3 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
++							 <&cpu4 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
++							 <&cpu5 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>;
++				};
++			};
++		};
++
++		cpu-0-2-1-thermal {
++			polling-delay-passive = <250>;
++
++			trips {
++				cpu_0_2_1_alert: trip-point1 {
++					temperature = <118000>;
++					hysteresis = <8000>;
++					type = "passive";
++				};
++			};
++
++			cooling-maps {
++				map0 {
++					trip = <&cpu_0_2_1_alert>;
++					cooling-device = <&cpu0 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
++							 <&cpu1 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
++							 <&cpu2 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
++							 <&cpu3 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
++							 <&cpu4 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
++							 <&cpu5 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>;
++				};
++			};
++		};
++
++		cpu-0-3-0-thermal {
++			polling-delay-passive = <250>;
++
++			trips {
++				cpu_0_3_0_alert: trip-point1 {
++					temperature = <118000>;
++					hysteresis = <8000>;
++					type = "passive";
++				};
++			};
++
++			cooling-maps {
++				map0 {
++					trip = <&cpu_0_3_0_alert>;
++					cooling-device = <&cpu0 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
++							 <&cpu1 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
++							 <&cpu2 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
++							 <&cpu3 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
++							 <&cpu4 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
++							 <&cpu5 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>;
++				};
++			};
++		};
++
++		cpu-0-3-1-thermal {
++			polling-delay-passive = <250>;
++
++			trips {
++				cpu_0_3_1_alert: trip-point1 {
++					temperature = <118000>;
++					hysteresis = <8000>;
++					type = "passive";
++				};
++			};
++
++			cooling-maps {
++				map0 {
++					trip = <&cpu_0_3_1_alert>;
++					cooling-device = <&cpu0 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
++							 <&cpu1 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
++							 <&cpu2 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
++							 <&cpu3 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
++							 <&cpu4 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
++							 <&cpu5 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>;
++				};
++			};
++		};
++
++		cpu-0-4-0-thermal {
++			polling-delay-passive = <250>;
++
++			trips {
++				cpu_0_4_0_alert: trip-point1 {
++					temperature = <118000>;
++					hysteresis = <8000>;
++					type = "passive";
++				};
++			};
++
++			cooling-maps {
++				map0 {
++					trip = <&cpu_0_4_0_alert>;
++					cooling-device = <&cpu0 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
++							 <&cpu1 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
++							 <&cpu2 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
++							 <&cpu3 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
++							 <&cpu4 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
++							 <&cpu5 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>;
++				};
++			};
++		};
++
++		cpu-0-4-1-thermal {
++			polling-delay-passive = <250>;
++
++			trips {
++				cpu_0_4_1_alert: trip-point1 {
++					temperature = <118000>;
++					hysteresis = <8000>;
++					type = "passive";
++				};
++			};
++
++			cooling-maps {
++				map0 {
++					trip = <&cpu_0_4_1_alert>;
++					cooling-device = <&cpu0 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
++							 <&cpu1 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
++							 <&cpu2 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
++							 <&cpu3 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
++							 <&cpu4 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
++							 <&cpu5 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>;
++				};
++			};
++		};
++
++		cpu-0-5-0-thermal {
++			polling-delay-passive = <250>;
++
++			trips {
++				cpu_0_5_0_alert: trip-point1 {
++					temperature = <118000>;
++					hysteresis = <8000>;
++					type = "passive";
++				};
++			};
++
++			cooling-maps {
++				map0 {
++					trip = <&cpu_0_5_0_alert>;
++					cooling-device = <&cpu0 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
++							 <&cpu1 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
++							 <&cpu2 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
++							 <&cpu3 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
++							 <&cpu4 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
++							 <&cpu5 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>;
++				};
++			};
++		};
++
++		cpu-0-5-1-thermal {
++			polling-delay-passive = <250>;
++
++			trips {
++				cpu_0_5_1_alert: trip-point1 {
++					temperature = <118000>;
++					hysteresis = <8000>;
++					type = "passive";
++				};
++			};
++
++			cooling-maps {
++				map0 {
++					trip = <&cpu_0_5_1_alert>;
++					cooling-device = <&cpu0 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
++							 <&cpu1 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
++							 <&cpu2 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
++							 <&cpu3 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
++							 <&cpu4 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
++							 <&cpu5 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>;
++				};
++			};
++		};
++
++		cpu-1-0-0-thermal {
++			polling-delay-passive = <250>;
++
++			trips {
++				cpu_1_0_0_alert: trip-point1 {
++					temperature = <118000>;
++					hysteresis = <8000>;
++					type = "passive";
++				};
++			};
++
++			cooling-maps {
++				map0 {
++					trip = <&cpu_1_0_0_alert>;
++					cooling-device = <&cpu6 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
++							 <&cpu7 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>;
++				};
++			};
++		};
++
++		cpu-1-0-1-thermal {
++			polling-delay-passive = <250>;
++
++			trips {
++				cpu_1_0_1_alert: trip-point1 {
++					temperature = <118000>;
++					hysteresis = <8000>;
++					type = "passive";
++				};
++			};
++
++			cooling-maps {
++				map0 {
++					trip = <&cpu_1_0_1_alert>;
++					cooling-device = <&cpu6 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
++							 <&cpu7 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>;
++				};
++			};
++		};
++
++		cpu-1-1-0-thermal {
++			polling-delay-passive = <250>;
++
++			trips {
++				cpu_1_1_0_alert: trip-point1 {
++					temperature = <118000>;
++					hysteresis = <8000>;
++					type = "passive";
++				};
++			};
++
++			cooling-maps {
++				map0 {
++					trip = <&cpu_1_1_0_alert>;
++					cooling-device = <&cpu6 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
++							 <&cpu7 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>;
++				};
++			};
++		};
++
++		cpu-1-1-1-thermal {
++			polling-delay-passive = <250>;
++
++			trips {
++				cpu_1_1_1_alert: trip-point1 {
++					temperature = <118000>;
++					hysteresis = <8000>;
++					type = "passive";
++				};
++			};
++
++			cooling-maps {
++				map0 {
++					trip = <&cpu_1_1_1_alert>;
++					cooling-device = <&cpu6 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
++							 <&cpu7 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>;
++				};
++			};
++		};
++
++		gpio2-thermal {
++			thermal-sensors = <&pmk8550_vadc 0x149>;
++		};
++
++		skin-thermal {
++			thermal-sensors = <&pmk8550_vadc 0x144>;
++		};
++
++		/*
++		 * Trips and actions follow the stock sys-therm-0 zone on the
++		 * reaches 118 C and takes the core offline at 120 C (SM8750P
++		 * qcom/sun-thermal-overlay.dtsi). At 88 C stock pauses CPUs 2-7,
++		 * caps the GPU at power level 5 and mitigates the CDSP; at 90 C
++		 * it also offlines CPUs 3-7 and mitigates the modem. Mainline
++		 * has no CPU pause/hotplug or CDSP/modem cooling devices here,
++		 * so both trips throttle the two CPU frequency domains instead.
++		 * GPU cooling state 5 is the same 734 MHz level as stock, the
++		 * speed bin having the same 14 levels on both kernels.
++		 */
++		xo-thermal {
++			polling-delay-passive = <5000>;
++
++			thermal-sensors = <&pmk8550_vadc 0x44>;
++
++			trips {
++				xo_alert0: trip-point0 {
++					temperature = <88000>;
++					hysteresis = <8000>;
++					type = "passive";
++				};
++
++				xo_alert1: trip-point1 {
++					temperature = <90000>;
++					hysteresis = <10000>;
++					type = "passive";
++				};
++
++				trip-point2 {
++					temperature = <100000>;
++					hysteresis = <0>;
++					type = "hot";
++				};
++			};
++
++			cooling-maps {
++				map0 {
++					trip = <&xo_alert0>;
++					cooling-device = <&cpu0 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
++							 <&cpu1 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
++							 <&cpu2 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
++							 <&cpu3 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
++							 <&cpu4 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
++							 <&cpu5 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
++							 <&cpu6 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
++							 <&cpu7 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>;
++				};
++
++				map1 {
++					trip = <&xo_alert0>;
++					cooling-device = <&gpu 5 THERMAL_NO_LIMIT>;
++				};
++
++				map2 {
++					trip = <&xo_alert1>;
++					cooling-device = <&cpu0 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
++							 <&cpu1 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
++							 <&cpu2 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
++							 <&cpu3 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
++							 <&cpu4 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
++							 <&cpu5 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
++							 <&cpu6 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
++							 <&cpu7 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>;
++				};
++			};
++		};
++	};
++};
++
++/* TB378FC reserves the full first 18 MiB for the hypervisor. */
++&gunyah_hyp_mem {
++	reg = <0x0 0x80000000 0x0 0x1200000>;
++};
++
++&adspslpi_mem {
++	reg = <0x0 0x9ee00000 0x0 0x3a80000>;
++};
++
++&q6_adsp_dtb_mem {
++	reg = <0x0 0x9ed80000 0x0 0x80000>;
++};
++
++&apps_rsc {
++	regulators-b {
++		compatible = "qcom,pm8550-rpmh-regulators";
++		qcom,pmic-id = "b";
++		vdd-bob1-supply = <&vph_pwr>;
++		vdd-bob2-supply = <&vph_pwr>;
++		vdd-l1-l4-l10-supply = <&vreg_s3g>;
++		vdd-l5-l16-supply = <&vreg_bob1>;
++		vdd-l6-l7-supply = <&vreg_bob1>;
++		vdd-l8-l9-supply = <&vreg_bob1>;
++		vdd-l11-supply = <&vreg_s7i>;
++		vdd-l12-supply = <&vreg_s3g>;
++		vdd-l15-supply = <&vreg_s3g>;
++		vdd-l17-supply = <&vreg_bob2>;
++
++		vreg_bob1: bob1 {
++			regulator-name = "vreg_bob1";
++			regulator-min-microvolt = <3008000>;
++			regulator-max-microvolt = <4000000>;
++		};
++
++		vreg_bob2: bob2 {
++			regulator-name = "vreg_bob2_ufs";
++			regulator-min-microvolt = <3000000>;
++			regulator-max-microvolt = <3000000>;
++			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
++		};
++
++		vreg_l5b: ldo5 {
++			regulator-name = "vreg_l5b_usb_repeater";
++			regulator-min-microvolt = <3100000>;
++			regulator-max-microvolt = <3148000>;
++			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
++		};
++
++		vreg_l7b_cam: ldo7 {
++			regulator-name = "vreg_l7b_cam_front_avdd";
++			regulator-min-microvolt = <2800000>;
++			regulator-max-microvolt = <2800000>;
++			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
++			regulator-allow-set-load;
++		};
++
++		vreg_l8b_cam: ldo8 {
++			regulator-name = "vreg_l8b_cam_rear_avdd";
++			regulator-min-microvolt = <2800000>;
++			regulator-max-microvolt = <2800000>;
++			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
++			regulator-allow-set-load;
++		};
++
++		vreg_l10b_cam: ldo10 {
++			regulator-name = "vreg_l10b_cam_vio";
++			regulator-min-microvolt = <1800000>;
++			regulator-max-microvolt = <1800000>;
++			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
++			regulator-allow-set-load;
++		};
++
++		vreg_l11b_cam: ldo11 {
++			regulator-name = "vreg_l11b_cam_rear_dvdd";
++			regulator-min-microvolt = <1200000>;
++			regulator-max-microvolt = <1200000>;
++			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
++			regulator-allow-set-load;
++		};
++
++		panel_vddio: ldo12 {
++			regulator-name = "vreg_l12b_panel_io";
++			regulator-min-microvolt = <1800000>;
++			regulator-max-microvolt = <1800000>;
++			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
++		};
++
++		vreg_l15b: ldo15 {
++			regulator-name = "vreg_l15b_1p8";
++			regulator-min-microvolt = <1800000>;
++			regulator-max-microvolt = <1800000>;
++			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
++		};
++
++		vreg_l16b_cam: ldo16 {
++			regulator-name = "vreg_l16b_cam_vaf";
++			regulator-min-microvolt = <2800000>;
++			regulator-max-microvolt = <2800000>;
++			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
++			regulator-allow-set-load;
++		};
++
++		vreg_l17b_ufs: ldo17 {
++			regulator-name = "vreg_l17b_ufs_vcc";
++			regulator-min-microvolt = <2504000>;
++			regulator-max-microvolt = <2504000>;
++			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
++			regulator-allow-set-load;
++			regulator-allowed-modes = <RPMH_REGULATOR_MODE_LPM
++						   RPMH_REGULATOR_MODE_HPM>;
++		};
++	};
++
++	regulators-d {
++		compatible = "qcom,pm8550ve-rpmh-regulators";
++		qcom,pmic-id = "d";
++		vdd-s1-supply = <&vph_pwr>;
++		vdd-s4-supply = <&vph_pwr>;
++		vdd-l1-supply = <&vreg_s7i>;
++		vdd-l2-supply = <&vreg_s1d>;
++
++		vreg_s1d: smps1 {
++			regulator-name = "vreg_s1d";
++			regulator-min-microvolt = <880000>;
++			regulator-max-microvolt = <1100000>;
++		};
++
++		vreg_s4d_0p85: smps4 {
++			regulator-name = "tb378fc-wlan-aon";
++			regulator-min-microvolt = <852000>;
++			regulator-max-microvolt = <1036000>;
++			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
++		};
++
++		vreg_l1d_ufs: ldo1 {
++			regulator-name = "vreg_l1d_ufs_vccq";
++			regulator-min-microvolt = <1200000>;
++			regulator-max-microvolt = <1200000>;
++			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
++			regulator-allow-set-load;
++			regulator-allowed-modes = <RPMH_REGULATOR_MODE_LPM
++						   RPMH_REGULATOR_MODE_HPM>;
++		};
++
++		vreg_l2d: ldo2 {
++			regulator-name = "vreg_l2d_usb_hsphy";
++			regulator-min-microvolt = <880000>;
++			regulator-max-microvolt = <912000>;
++			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
++		};
++	};
++
++	regulators-f {
++		compatible = "qcom,pm8550ve-rpmh-regulators";
++		qcom,pmic-id = "f";
++		vdd-l1-supply = <&vreg_s1d>;
++		vdd-l2-supply = <&vreg_s7i>;
++		vdd-l3-supply = <&vreg_s3g>;
++		vdd-s5-supply = <&vph_pwr>;
++
++		vreg_s5f_0p85: smps5 {
++			regulator-name = "tb378fc-wlan-dig";
++			regulator-min-microvolt = <852000>;
++			regulator-max-microvolt = <1000000>;
++			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
++		};
++
++		vreg_l1f_0p88: ldo1 {
++			regulator-name = "tb378fc-pcie-csi-phy";
++			regulator-min-microvolt = <880000>;
++			regulator-max-microvolt = <920000>;
++			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
++		};
++
++		vreg_l2f_1p2: ldo2 {
++			regulator-name = "tb378fc-wlan-io12";
++			regulator-min-microvolt = <1200000>;
++			regulator-max-microvolt = <1200000>;
++			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
++		};
++
++		vreg_l3f_1p8: ldo3 {
++			regulator-name = "tb378fc-wlan-io";
++			regulator-min-microvolt = <1800000>;
++			regulator-max-microvolt = <1800000>;
++			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
++		};
++	};
++
++	regulators-g {
++		compatible = "qcom,pm8550ve-rpmh-regulators";
++		qcom,pmic-id = "g";
++		vdd-s3-supply = <&vph_pwr>;
++		vdd-l3-supply = <&vreg_s7i>;
++
++		vreg_s3g: smps3 {
++			regulator-name = "vreg_s3g";
++			regulator-min-microvolt = <1856000>;
++			regulator-max-microvolt = <2000000>;
++		};
++
++		vreg_l3g: ldo3 {
++			regulator-name = "vreg_l3g_1p2";
++			regulator-min-microvolt = <1200000>;
++			regulator-max-microvolt = <1256000>;
++			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
++		};
++	};
++
++	regulators-i {
++		compatible = "qcom,pm8550ve-rpmh-regulators";
++		qcom,pmic-id = "i";
++		vdd-s7-supply = <&vph_pwr>;
++		vdd-l1-supply = <&vreg_s7i>;
++		vdd-l3-supply = <&vreg_s1d>;
++
++		vreg_s7i: smps7 {
++			regulator-name = "vreg_s7i_usb_supply";
++			regulator-min-microvolt = <1224000>;
++			regulator-max-microvolt = <1340000>;
++			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
++		};
++
++		vreg_l1i_cam: ldo1 {
++			regulator-name = "vreg_l1i_cam_front_dvdd";
++			regulator-min-microvolt = <1200000>;
++			regulator-max-microvolt = <1200000>;
++			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
++			regulator-allow-set-load;
++		};
++
++		dsi_phy_supply: ldo3 {
++			regulator-name = "vreg_l3i_dsi_phy";
++			regulator-min-microvolt = <880000>;
++			regulator-max-microvolt = <880000>;
++			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
++		};
++	};
++
++	regulators-j {
++		compatible = "qcom,pm8550vs-rpmh-regulators";
++		qcom,pmic-id = "j";
++		vdd-l1-supply = <&vreg_s1d>;
++
++		vreg_l1j_ufs: ldo1 {
++			regulator-name = "vreg_l1j_ufs_phy";
++			/* Stock PHY requires >= 912 mV within its 880..920 mV rail. */
++			regulator-min-microvolt = <912000>;
++			regulator-max-microvolt = <912000>;
++			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
++			regulator-allow-set-load;
++			regulator-allowed-modes = <RPMH_REGULATOR_MODE_LPM
++						   RPMH_REGULATOR_MODE_HPM>;
++		};
++	};
++};
++
++&tlmm {
++	/* Reserved GPIOs from stock DT: 36..39, 74. */
++	gpio-reserved-ranges = <36 4>, <74 1>;
++
++	panel_te: panel-te-state {
++		pins = "gpio86";
++		function = "mdp_vsync";
++		drive-strength = <2>;
++		bias-disable;
++		input-enable;
++	};
++
++	tb378fc_touch_irq: tb378fc-touch-irq-state {
++		pins = "gpio162";
++		function = "gpio";
++		drive-strength = <2>;
++		bias-pull-up;
++		input-enable;
++	};
++
++	tb378fc_wlan_en: wlan-enable-state {
++		pins = "gpio16";
++		function = "gpio";
++		drive-strength = <16>;
++		bias-pull-up;
++	};
++
++	tb378fc_wcd_reset: tb378fc-wcd-reset-state {
++		pins = "gpio101";
++		function = "gpio";
++		drive-strength = <16>;
++		bias-disable;
++	};
++
++	tb378fc_amp_resets: amp-resets-state {
++		pins = "gpio106", "gpio128", "gpio120", "gpio108";
++		function = "gpio";
++		drive-strength = <2>;
++		bias-disable;
++	};
++
++	tb378fc_gpio_i2c: tb378fc-amp-i2c-state {
++		pins = "gpio52", "gpio53";
++		function = "gpio";
++		drive-strength = <2>;
++		bias-pull-up;
++	};
++
++	tb378fc_sec_tdm: secondary-tdm-state {
++		sck-pins {
++			pins = "gpio121";
++			function = "i2s1_sck";
++			drive-strength = <8>;
++			bias-disable;
++		};
++		data0-pins {
++			pins = "gpio122";
++			function = "i2s1_data0";
++			drive-strength = <8>;
++			bias-disable;
++		};
++		ws-pins {
++			pins = "gpio123";
++			function = "i2s1_ws";
++			drive-strength = <8>;
++			bias-disable;
++		};
++		data1-pins {
++			pins = "gpio124";
++			function = "i2s1_data1";
++			drive-strength = <8>;
++			bias-disable;
++		};
++	};
++};
++
++&pm8550_gpios {
++	tb378fc_volume_up: volume-up-state {
++		pins = "gpio6";
++		function = "normal";
++		power-source = <1>;
++		input-enable;
++		bias-pull-up;
++	};
++};
++
++&pm8550ve_f_gpios {
++	tb378fc_bt_enable: bt-enable-state {
++		pins = "gpio3";
++		function = "normal";
++		power-source = <1>;
++		bias-disable;
++		input-disable;
++		output-enable;
++	};
++};
++
++&pon_pwrkey {
++	status = "okay";
++};
++
++&pon_resin {
++	linux,code = <KEY_VOLUMEDOWN>;
++	status = "okay";
++};
++
++&pm8550_flash {
++	status = "okay";
++
++	/* Native rear camera uses channels 1 + 4; conservative default-off limits. */
++	led-0 {
++		label = "white:flash:tb378fc";
++		function = LED_FUNCTION_FLASH;
++		color = <LED_COLOR_ID_WHITE>;
++		led-sources = <1>, <4>;
++		led-max-microamp = <100000>;
++		flash-max-microamp = <200000>;
++		flash-max-timeout-us = <200000>;
++		default-state = "off";
++	};
++};
++
++/* UFS internal storage */
++&ufs_mem_phy {
++	vdda-phy-supply = <&vreg_l1j_ufs>;
++	vdda-pll-supply = <&vreg_l3g>;
++	status = "okay";
++};
++
++&ufs_mem_hc {
++	reset-gpios = <&tlmm 215 GPIO_ACTIVE_LOW>;
++	vcc-supply = <&vreg_l17b_ufs>;
++	vcc-max-microamp = <1300000>;
++	vccq-supply = <&vreg_l1d_ufs>;
++	vccq-max-microamp = <1200000>;
++	status = "okay";
++};
++
++/* QUPv3 wrappers and DMA */
++&qupv3_1 {
++	status = "okay";
++};
++
++&gpi_dma1 {
++	status = "okay";
++};
++
++&qupv3_2 {
++	status = "okay";
++};
++
++&gpi_dma2 {
++	status = "okay";
++};
++
++/* Never let hardware I2C5 claim gpio52/53 owned by tb378fc-amp-i2c. */
++&i2c5 {
++	status = "disabled";
++};
++
++/* WCD9390 USB-C SBU switch for DP Alt Mode */
++&i2c3 {
++	status = "okay";
++
++	typec-mux@e {
++		compatible = "qcom,wcd9390-usbss";
++		reg = <0x0e>;
++		vdd-supply = <&vreg_l15b>;
++		mode-switch;
++		orientation-switch;
++
++		ports {
++			#address-cells = <1>;
++			#size-cells = <0>;
++
++			port@0 {
++				reg = <0>;
++
++				usb_sbu_mux: endpoint {
++					remote-endpoint = <&pmic_glink_sbu>;
++				};
++			};
++		};
++	};
++};
++
++/* Dual AW99706B backlight secondary bus + primary bus & LCD bias */
++&i2c8 {
++	status = "okay";
++	clock-frequency = <400000>;
++};
++
++&i2c10 {
++	status = "okay";
++	clock-frequency = <400000>;
++
++	panel_bias: regulator@3e {
++		compatible = "lenovo,tb378fc-panel-bias";
++		reg = <0x3e>;
++		regulator-name = "tb378fc-panel-bias";
++		positive-gpios = <&tlmm 72 GPIO_ACTIVE_HIGH>;
++		negative-gpios = <&tlmm 73 GPIO_ACTIVE_HIGH>;
++	};
++
++	panel_backlight: backlight@76 {
++		compatible = "lenovo,tb378fc-aw99706b";
++		reg = <0x76>;
++		enable-gpios = <&tlmm 88 GPIO_ACTIVE_HIGH>;
++		lenovo,secondary-i2c-bus = <&i2c8>;
++	};
++};
++
++/* Novatek NT36536 SPI touchscreen */
++&spi4 {
++	status = "okay";
++
++	touchscreen@0 {
++		compatible = "lenovo,tb378fc-nvt";
++		reg = <0>;
++		spi-max-frequency = <9600000>;
++		pinctrl-names = "default";
++		pinctrl-0 = <&tb378fc_touch_irq>;
++		interrupt-parent = <&tlmm>;
++		interrupts = <162 IRQ_TYPE_EDGE_RISING>;
++		panel = <&panel>;
++		touchscreen-size-x = <2190>;
++		touchscreen-size-y = <3504>;
++		touchscreen-x-mm = <175>;
++		touchscreen-y-mm = <280>;
++		touchscreen-inverted-x;
++		touchscreen-swapped-x-y;
++		firmware-name = "novatek/tb378fc.bin";
++		novatek,pen-support;
++	};
++};
++
++/* WCN7860 Bluetooth UART */
++&uart14 {
++	pinctrl-names = "default";
++	pinctrl-0 = <&qup_uart14_default>, <&qup_uart14_cts_rts>;
++	uart-has-rtscts;
++	status = "okay";
++
++	bluetooth {
++		compatible = "qcom,wcn7860-bt";
++		max-speed = <3200000>;
++		vddrfacmn-supply = <&vreg_pmu_rfa_cmn>;
++		vddaon-supply = <&vreg_pmu_aon_0p59>;
++		vddwlcx-supply = <&vreg_pmu_wlcx_0p8>;
++		vddwlmx-supply = <&vreg_pmu_wlmx_0p85>;
++		vddrfa0p8-supply = <&vreg_pmu_rfa_0p8>;
++		vddrfa1p2-supply = <&vreg_pmu_rfa_1p2>;
++		vddrfa1p8-supply = <&vreg_pmu_rfa_1p8>;
++	};
++};
++
++/* WCN7860 PCIe Wi-Fi */
++&pcie0 {
++	pinctrl-names = "default";
++	pinctrl-0 = <&pcie0_default_state>;
++	status = "okay";
++};
++
++&pcie0_phy {
++	vdda-phy-supply = <&vreg_l1f_0p88>;
++	vdda-pll-supply = <&vreg_l3g>;
++	status = "okay";
++};
++
++&pcieport0 {
++	wake-gpios = <&tlmm 104 GPIO_ACTIVE_HIGH>;
++	reset-gpios = <&tlmm 102 GPIO_ACTIVE_LOW>;
++
++	wifi@0 {
++		compatible = "pci17cb,110e";
++		reg = <0x10000 0x0 0x0 0x0 0x0>;
++
++		vddrfacmn-supply = <&vreg_pmu_rfa_cmn>;
++		vddaon-supply = <&vreg_pmu_aon_0p59>;
++		vddwlcx-supply = <&vreg_pmu_wlcx_0p8>;
++		vddwlmx-supply = <&vreg_pmu_wlmx_0p85>;
++		vddrfa0p8-supply = <&vreg_pmu_rfa_0p8>;
++		vddrfa1p2-supply = <&vreg_pmu_rfa_1p2>;
++		vddrfa1p8-supply = <&vreg_pmu_rfa_1p8>;
++		vddpcie0p9-supply = <&vreg_pmu_pcie_0p9>;
++		vddpcie1p8-supply = <&vreg_pmu_pcie_1p8>;
++	};
++};
++
++/* Display subsystem: dual-DSI DSC NT36526 + DisplayPort Alt Mode */
++&dispcc {
++	status = "okay";
++};
++
++&mdss {
++	memory-region = <&tb378fc_splash>;
++	status = "okay";
++};
++
++&mdss_dsi0 {
++	vdda-supply = <&vreg_l3g>;
++	qcom,dual-dsi-mode;
++	qcom,sync-dual-dsi;
++	qcom,master-dsi;
++	status = "okay";
++
++	panel: panel@0 {
++		compatible = "lenovo,tb378fc-nt36526";
++		reg = <0>;
++		reset-gpios = <&tlmm 98 GPIO_ACTIVE_LOW>;
++		pinctrl-names = "default";
++		pinctrl-0 = <&panel_te>;
++		vddio-supply = <&panel_vddio>;
++		bias-supply = <&panel_bias>;
++		backlight = <&panel_backlight>;
++
++		ports {
++			#address-cells = <1>;
++			#size-cells = <0>;
++
++			port@0 {
++				reg = <0>;
++
++				panel0_in: endpoint {
++					remote-endpoint = <&mdss_dsi0_out>;
++				};
++			};
++
++			port@1 {
++				reg = <1>;
++
++				panel1_in: endpoint {
++					remote-endpoint = <&mdss_dsi1_out>;
++				};
++			};
++		};
++	};
++};
++
++&mdss_dsi0_out {
++	remote-endpoint = <&panel0_in>;
++	data-lanes = <0 1 2 3>;
++};
++
++&mdss_dsi0_phy {
++	vdds-supply = <&dsi_phy_supply>;
++	status = "okay";
++};
++
++&mdss_dsi1 {
++	vdda-supply = <&vreg_l3g>;
++	qcom,dual-dsi-mode;
++	qcom,sync-dual-dsi;
++	/* Secondary link shares DSI0 PLL as in the native display configuration. */
++	clocks = <&dispcc DISP_CC_MDSS_BYTE1_CLK>,
++		 <&dispcc DISP_CC_MDSS_BYTE1_INTF_CLK>,
++		 <&dispcc DISP_CC_MDSS_PCLK1_CLK>,
++		 <&dispcc DISP_CC_MDSS_ESC1_CLK>,
++		 <&dispcc DISP_CC_MDSS_AHB_CLK>,
++		 <&gcc GCC_DISP_HF_AXI_CLK>,
++		 <&mdss_dsi0_phy DSI_PIXEL_PLL_CLK>,
++		 <&mdss_dsi0_phy DSI_BYTE_PLL_CLK>,
++		 <&dispcc DISP_CC_ESYNC1_CLK>,
++		 <&dispcc DISP_CC_OSC_CLK>,
++		 <&dispcc DISP_CC_MDSS_BYTE1_CLK_SRC>,
++		 <&dispcc DISP_CC_MDSS_PCLK1_CLK_SRC>;
++	status = "okay";
++};
++
++&mdss_dsi1_out {
++	remote-endpoint = <&panel1_in>;
++	data-lanes = <0 1 2 3>;
++};
++
++&mdss_dsi1_phy {
++	vdds-supply = <&dsi_phy_supply>;
++	status = "okay";
++};
++
++&mdss_dp0 {
++	status = "okay";
++};
++
++&mdss_dp0_out {
++	link-frequencies = /bits/ 64 <1620000000 2700000000 5400000000 8100000000>;
++};
++
++/* USB3 OTG + DP Alt Mode + eUSB2 repeater */
++&pmih0108_eusb2_repeater {
++	vdd18-supply = <&vreg_l15b>;
++	vdd3-supply = <&vreg_l5b>;
++	status = "okay";
++};
++
++&usb_hsphy {
++	vdd-supply = <&vreg_l2d>;
++	vdda12-supply = <&vreg_l3g>;
++	phys = <&pmih0108_eusb2_repeater>;
++	status = "okay";
++};
++
++&usb_dp_qmpphy {
++	vdda-pll-supply = <&vreg_l2d>;
++	vdda-phy-supply = <&vreg_l3g>;
++	status = "okay";
++};
++
++&usb_dp_qmpphy_out {
++	remote-endpoint = <&pmic_glink_ss_in>;
++};
++
++&usb {
++	usb-psy-name = "qcom-battmgr-usb";
++	usb-role-switch;
++	dr_mode = "otg";
++	maximum-speed = "super-speed-plus";
++	status = "okay";
++};
++
++&usb_dwc3_hs {
++	remote-endpoint = <&pmic_glink_hs_in>;
++};
++
++/* GPU & Iris hardware video codec */
++&gpu {
++	status = "okay";
++};
++
++&gpu_zap_shader {
++	firmware-name = "qcom/sm8750/tb378fc/gen80000_zap.mbn";
++};
++
++&iris {
++	firmware-name = "qcom/sm8750/tb378fc/vpu35_4v.mbn";
++	status = "okay";
++};
++
++/* ADSP & SoundWire WCD9390 */
++&remoteproc_adsp {
++	reg = <0x0 0x03000000 0x0 0x10000>;
++	firmware-name = "qcom/sm8750/tb378fc/adsp.mdt",
++			"qcom/sm8750/tb378fc/adsp_dtb.mdt";
++	status = "okay";
++};
++
++&swr1 {
++	status = "okay";
++
++	wcd939x_rx: codec@0,4 {
++		compatible = "sdw20217010e00";
++		reg = <0 4>;
++		qcom,rx-port-mapping = <1 2 3 4 5 9>;
++	};
++};
++
++&swr2 {
++	status = "okay";
++
++	wcd939x_tx: codec@0,3 {
++		compatible = "sdw20217010e00";
++		reg = <0 3>;
++		qcom,tx-port-mapping = <3 4 3 4>;
++	};
++};
++
++#include "sm8750-lenovo-tb378fc-camera.dtsi"

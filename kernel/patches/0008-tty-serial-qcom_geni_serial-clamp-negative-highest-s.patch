@@ -1,0 +1,27 @@
+From 2986d8041d0562fbb115d98f492bd50bcdbf0a9f Mon Sep 17 00:00:00 2001
+From: TB378FC Maintainer <maintainer@tb378fc.local>
+Date: Fri, 20 Nov 2026 19:39:20 +0800
+Subject: [PATCH] tty: serial: qcom_geni_serial: clamp negative highest serial
+ alias
+
+When a board devicetree has no serial* alias (such as TB378FC, whose
+only enabled UART is the Bluetooth serdev), of_alias_get_highest_id()
+returns -ENODEV. Clamp to -1 before adding 1 so ida_alloc_range()
+starts at 0 instead of failing with -EINVAL.
+---
+ drivers/tty/serial/qcom_geni_serial.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/drivers/tty/serial/qcom_geni_serial.c b/drivers/tty/serial/qcom_geni_serial.c
+index 9801cd56538..2dc8f3cca2e 100644
+--- a/drivers/tty/serial/qcom_geni_serial.c
++++ b/drivers/tty/serial/qcom_geni_serial.c
+@@ -293,7 +293,7 @@ static struct qcom_geni_serial_port *get_port_from_line(int line, bool console,
+ 			return ERR_PTR(-ENOMEM);
+ 
+ 		if (line < 0 || line >= nr_ports)
+-			line = ida_alloc_range(&port_ida, max_alias_num + 1,
++			line = ida_alloc_range(&port_ida, max(max_alias_num, -1) + 1,
+ 					       nr_ports - 1, GFP_KERNEL);
+ 		else
+ 			line = ida_alloc_range(&port_ida, line,

@@ -1,12 +1,36 @@
 {
-  "repository": "https://github.com/yzddmr6/linux-sm8750-erhai.git",
-  "commit": "958a2b4654196bb52dfa0217a0f65ffeaa919f81",
-  "baseline": "Linux 7.2",
-  "patches": [
-    "patches/0001-tb378fc-platform.patch"
-  ],
-  "toolchain_tested": "aarch64-linux-gnu-gcc (Debian 12.2.0-14) 12.2.0",
-  "runtime_kernel_release": "7.2.0-tb378fc-wifi+",
-  "tested_image_sha256": "21c91b2dddf71e38ed6ae4366135a56ec9e02fe9d617bba33937b3e40c6483e9",
-  "snapshot_note": "Exported final development source and external modules; a clean end-to-end image rebuild has not yet been device-validated."
+  "schema": 2,
+  "device": "lenovo-tb378fc",
+  "kernel": {
+    "repository": "https://github.com/yzddmr6/linux-sm8750-erhai.git",
+    "branch": "sm8750/v7.4-dev",
+    "baseline_tag": "v7.4-rc2",
+    "commit": "da4b783e34bd05d7451a6f904fbf567af1215f99",
+    "dtb": "arch/arm64/boot/dts/qcom/sm8750-lenovo-tb378fc.dtb",
+    "patches": [
+      "kernel/patches/0001-drm-panel-add-Lenovo-TB378FC-Novatek-NT36526-dual-DS.patch",
+      "kernel/patches/0002-display-add-TB378FC-panel-bias-regulator-and-dual-AW.patch",
+      "kernel/patches/0003-drm-msm-preserve-direct-scanout-VBIF-arbitration-and.patch",
+      "kernel/patches/0004-ASoC-TB378FC-add-AW88480-amps-WCD939x-fixes-and-ADSP.patch",
+      "kernel/patches/0005-Input-nt36536-add-Lenovo-TB378FC-variant-and-trim-ID.patch",
+      "kernel/patches/0006-power-supply-qcom_battmgr-add-Lenovo-TB378FC-quirks-.patch",
+      "kernel/patches/0007-media-TB378FC-add-GC08A8-OV13B10-board-support-and-C.patch",
+      "kernel/patches/0008-tty-serial-qcom_geni_serial-clamp-negative-highest-s.patch",
+      "kernel/patches/0009-arm64-dts-qcom-add-Lenovo-Xiaoxin-Pad-Pro-GT-13-TB37.patch"
+    ],
+    "upstream_config_fragments": [
+      "arch/arm64/configs/sm8750-netfilter.config",
+      "arch/arm64/configs/sm8750-peripherals.config",
+      "arch/arm64/configs/sm8750-snap.config",
+      "arch/arm64/configs/sm8750-virt.config",
+      "arch/arm64/configs/sm8750-waydroid.config"
+    ],
+    "board_config_fragment": "kernel/configs/tb378fc.config",
+    "rust_toolchain_lock": "kernel/rust-toolchain.json"
+  },
+  "upstream_integration_reference": {
+    "repository": "https://github.com/yzddmr6/onepluspad-2pro-mainline.git",
+    "tag": "v0.12.1",
+    "commit": "fad774fa045256d63cf6b11ae9be7a1dcb58efb5"
+  }
 }

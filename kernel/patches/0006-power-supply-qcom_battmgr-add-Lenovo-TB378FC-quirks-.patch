@@ -1,0 +1,226 @@
+From 2d1f4290389fb75b4c63dc898c0563fa180d3da1 Mon Sep 17 00:00:00 2001
+From: TB378FC Maintainer <maintainer@tb378fc.local>
+Date: Fri, 20 Nov 2026 19:39:20 +0800
+Subject: [PATCH] power: supply: qcom_battmgr: add Lenovo TB378FC quirks and
+ diagnostics
+
+Add lenovo,tb378fc-pmic-glink binding and quirks (inverted battery
+current, hidden inconsistent power_now, bounded 0..900mA USB ICL
+writes on SDP/CDP/PD, and read-only opcode 0x60 telemetry sysfs).
+---
+ .../bindings/soc/qcom/qcom,pmic-glink.yaml    |  10 ++
+ drivers/power/supply/qcom_battmgr.c           | 131 ++++++++++++++++++
+ 2 files changed, 141 insertions(+)
+
+diff --git a/Documentation/devicetree/bindings/soc/qcom/qcom,pmic-glink.yaml b/Documentation/devicetree/bindings/soc/qcom/qcom,pmic-glink.yaml
+index 207bf666ed9..db76cdf9fe1 100644
+--- a/Documentation/devicetree/bindings/soc/qcom/qcom,pmic-glink.yaml
++++ b/Documentation/devicetree/bindings/soc/qcom/qcom,pmic-glink.yaml
+@@ -62,6 +62,16 @@ properties:
+           - const: qcom,sm8550-pmic-glink
+           - const: qcom,pmic-glink
+ 
++      - description:
++          Lenovo TB378FC PMIC GLINK: battery power property does not match
++          voltage/current, current is positive during discharge, and bounded
++          native USB input current limits are supported.
++        items:
++          - const: lenovo,tb378fc-pmic-glink
++          - const: qcom,sm8750-pmic-glink
++          - const: qcom,sm8550-pmic-glink
++          - const: qcom,pmic-glink
++
+       - description:
+           Devices whose battery manager firmware speaks the SoC protocol but
+           reports the battery current with the opposite sign (positive while
+diff --git a/drivers/power/supply/qcom_battmgr.c b/drivers/power/supply/qcom_battmgr.c
+index f66e13275bd..24bc3affc73 100644
+--- a/drivers/power/supply/qcom_battmgr.c
++++ b/drivers/power/supply/qcom_battmgr.c
+@@ -63,6 +63,8 @@ enum qcom_battmgr_variant {
+ #define QCOM_BATTMGR_QUIRK_PPS				BIT(5)
+ /* OPLUS adapter type, PD notifications and fixed PDO voltage requests */
+ #define QCOM_BATTMGR_QUIRK_OPLUS_PD			BIT(6)
++/* Lenovo TB378FC: bounded SDP/CDP/PD USB ICL writes & read-only OEM telemetry */
++#define QCOM_BATTMGR_QUIRK_NATIVE_USB_ICL		BIT(7)
+ 
+ #define BATTMGR_BAT_STATUS		0x1
+ 
+@@ -105,6 +107,7 @@ enum qcom_battmgr_variant {
+ 
+ #define BATTMGR_BAT_CHARGE_TIME		0xd
+ 
++#define BATTMGR_NATIVE_LENOVO_PROPERTY_GET	0x60
+ #define BATTMGR_BAT_PROPERTY_GET	0x30
+ #define BATTMGR_BAT_PROPERTY_SET	0x31
+ #define BATT_STATUS			0
+@@ -483,6 +486,8 @@ struct qcom_battmgr {
+ 	struct completion ack;
+ 	/* Only a reply to the outstanding opcode may complete @ack. */
+ 	u32 request_opcode;
++	u32 lenovo_property;
++	u32 lenovo_value;
+ 
+ 	bool service_up;
+ 
+@@ -3319,12 +3324,55 @@ static const enum power_supply_property sm8350_usb_props[] = {
+ 	POWER_SUPPLY_PROP_USB_TYPE,
+ };
+ 
++static int qcom_battmgr_usb_is_writeable(struct power_supply *psy,
++					 enum power_supply_property psp)
++{
++	struct qcom_battmgr *battmgr = power_supply_get_drvdata(psy);
++
++	return psp == POWER_SUPPLY_PROP_INPUT_CURRENT_LIMIT &&
++	       (battmgr->quirks & QCOM_BATTMGR_QUIRK_NATIVE_USB_ICL);
++}
++
++static int qcom_battmgr_usb_set_property(struct power_supply *psy,
++					 enum power_supply_property psp,
++					 const union power_supply_propval *val)
++{
++	struct qcom_battmgr *battmgr = power_supply_get_drvdata(psy);
++	int ret;
++
++	if (!qcom_battmgr_usb_is_writeable(psy, psp))
++		return -EOPNOTSUPP;
++	if (!battmgr->service_up)
++		return -EAGAIN;
++	if (val->intval < 0 || val->intval > 900000)
++		return -EINVAL;
++
++	mutex_lock(&battmgr->lock);
++	ret = qcom_battmgr_request_property(battmgr, BATTMGR_USB_PROPERTY_GET,
++					    USB_ADAP_TYPE, 0);
++	if (ret)
++		goto unlock;
++	if (battmgr->usb.usb_type != POWER_SUPPLY_USB_TYPE_SDP &&
++	    battmgr->usb.usb_type != POWER_SUPPLY_USB_TYPE_CDP &&
++	    battmgr->usb.usb_type != POWER_SUPPLY_USB_TYPE_PD) {
++		ret = -EOPNOTSUPP;
++		goto unlock;
++	}
++	ret = qcom_battmgr_set_property_locked(battmgr, BATTMGR_USB_PROPERTY_SET,
++					       USB_INPUT_CURR_LIMIT, val->intval);
++unlock:
++	mutex_unlock(&battmgr->lock);
++	return ret;
++}
++
+ static const struct power_supply_desc sm8350_usb_psy_desc = {
+ 	.name = "qcom-battmgr-usb",
+ 	.type = POWER_SUPPLY_TYPE_USB,
+ 	.properties = sm8350_usb_props,
+ 	.num_properties = ARRAY_SIZE(sm8350_usb_props),
+ 	.get_property = qcom_battmgr_usb_get_property,
++	.set_property = qcom_battmgr_usb_set_property,
++	.property_is_writeable = qcom_battmgr_usb_is_writeable,
+ 	.usb_types = BIT(POWER_SUPPLY_USB_TYPE_UNKNOWN) |
+ 		     BIT(POWER_SUPPLY_USB_TYPE_SDP)     |
+ 		     BIT(POWER_SUPPLY_USB_TYPE_DCP)     |
+@@ -3706,6 +3754,18 @@ static void qcom_battmgr_sm8350_callback(struct qcom_battmgr *battmgr,
+ 	}
+ 
+ 	switch (opcode) {
++	case BATTMGR_NATIVE_LENOVO_PROPERTY_GET:
++		if (!(battmgr->quirks & QCOM_BATTMGR_QUIRK_NATIVE_USB_ICL))
++			return;
++		if (payload_len != sizeof(resp->intval)) {
++			battmgr->error = -ENODATA;
++			break;
++		}
++		if (le32_to_cpu(resp->intval.property) != READ_ONCE(battmgr->lenovo_property))
++			return;
++		battmgr->error = le32_to_cpu(resp->intval.result) ? -EIO : 0;
++		WRITE_ONCE(battmgr->lenovo_value, le32_to_cpu(resp->intval.value));
++		break;
+ 	case BATTMGR_BAT_PROPERTY_GET:
+ 		property = le32_to_cpu(resp->intval.property);
+ 		if (property == BATT_MODEL_NAME) {
+@@ -4171,7 +4231,71 @@ static const struct of_device_id qcom_battmgr_of_variants[] = {
+  * Devices whose firmware follows the protocol of their SoC but reports some
+  * values with a different meaning.
+  */
++static ssize_t lenovo_charge_diagnostics_show(struct device *dev,
++					      struct device_attribute *attr, char *buf)
++{
++	static const struct {
++		const char *name;
++		u32 property;
++	} fields[] = {
++		{ "pps_status", 52 },
++		{ "ibus_total_raw", 48 },
++		{ "sc8541_master_ibus_raw", 46 },
++		{ "sc8541_slave_ibus_raw", 47 },
++		{ "fg1_current_raw", 14 },
++		{ "fg2_current_raw", 15 },
++		{ "fg1_voltage_raw", 16 },
++		{ "fg2_voltage_raw", 17 },
++		{ "fg1_temperature_raw", 12 },
++		{ "fg2_temperature_raw", 13 },
++	};
++	struct qcom_battmgr *battmgr = dev_get_drvdata(dev);
++	ssize_t count = 0;
++	int i, ret;
++
++	if (!(battmgr->quirks & QCOM_BATTMGR_QUIRK_NATIVE_USB_ICL))
++		return -EOPNOTSUPP;
++	mutex_lock(&battmgr->lock);
++	if (!battmgr->service_up) {
++		mutex_unlock(&battmgr->lock);
++		return -EAGAIN;
++	}
++	for (i = 0; i < ARRAY_SIZE(fields); i++) {
++		WRITE_ONCE(battmgr->lenovo_property, fields[i].property);
++		ret = qcom_battmgr_request_property(battmgr,
++				BATTMGR_NATIVE_LENOVO_PROPERTY_GET,
++				fields[i].property, 0);
++		if (ret) {
++			count += sysfs_emit_at(buf, count, "%s error %d\n",
++					       fields[i].name, ret);
++			if (ret == -ETIMEDOUT || ret == -ECONNRESET)
++				break;
++		} else {
++			count += sysfs_emit_at(buf, count, "%s %d\n",
++					       fields[i].name,
++					       (s32)READ_ONCE(battmgr->lenovo_value));
++		}
++	}
++	mutex_unlock(&battmgr->lock);
++	return count;
++}
++static DEVICE_ATTR_RO(lenovo_charge_diagnostics);
++
++static struct attribute *qcom_battmgr_lenovo_attrs[] = {
++	&dev_attr_lenovo_charge_diagnostics.attr,
++	NULL,
++};
++static const struct attribute_group qcom_battmgr_lenovo_group = {
++	.attrs = qcom_battmgr_lenovo_attrs,
++};
++
+ static const struct of_device_id qcom_battmgr_of_quirks[] = {
++	{
++		.compatible = "lenovo,tb378fc-pmic-glink",
++		.data = (void *)(QCOM_BATTMGR_QUIRK_NO_BATT_POWER_NOW |
++				 QCOM_BATTMGR_QUIRK_BATT_CURRENT_INVERTED |
++				 QCOM_BATTMGR_QUIRK_NATIVE_USB_ICL),
++	},
+ 	{
+ 		.compatible = "oneplus,pad2pro-pmic-glink",
+ 		.data = (void *)(QCOM_BATTMGR_QUIRK_BATT_CURRENT_INVERTED |
+@@ -4664,6 +4788,13 @@ static int qcom_battmgr_probe(struct auxiliary_device *adev,
+ 	if (ret)
+ 		return dev_err_probe(dev, ret, "cannot create charging interface\n");
+ 
++	if (battmgr->quirks & QCOM_BATTMGR_QUIRK_NATIVE_USB_ICL) {
++		ret = devm_device_add_group(dev, &qcom_battmgr_lenovo_group);
++		if (ret)
++			return dev_err_probe(dev, ret,
++					     "cannot create Lenovo diagnostics group\n");
++	}
++
+ 	if (battmgr->quirks & QCOM_BATTMGR_QUIRK_OPLUS_PD) {
+ 		ret = devm_device_init_wakeup(dev);
+ 		if (ret)
