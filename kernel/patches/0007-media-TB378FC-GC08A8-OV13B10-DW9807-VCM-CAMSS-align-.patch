@@ -1,25 +1,53 @@
-From df8a5bb3575cc3567359efc70268a11c7b66b9b3 Mon Sep 17 00:00:00 2001
+From 6bd3f26c8760201db6d3e6c4a6d9af52be490093 Mon Sep 17 00:00:00 2001
 From: TB378FC Maintainer <maintainer@tb378fc.local>
-Date: Fri, 20 Nov 2026 20:55:21 +0800
-Subject: [PATCH] media: TB378FC: add GC08A8, OV13B10 board support, and CAMSS
- Gen4 alignment
+Date: Sat, 21 Nov 2026 00:48:49 +0800
+Subject: [PATCH] media: TB378FC: GC08A8, OV13B10, DW9807 VCM, CAMSS align, and
+ Iris clock scaling
 
-Add the GalaxyCore GC08A8 front sensor driver, add OF matching and
-TB378FC VAF/power sequencing to OV13B10, and align CAMSS Gen4 RDI
-sizeimage to 256 bytes to match VFE_BUS_WM_FRAME_INCR hardware units.
+Add GalaxyCore GC08A8 front sensor support, OV13B10 TB378FC OF/VAF
+sequencing, DW9807 (GT9772B) rear VCM autofocus support with safe
+runtime-PM-only rail control and focus-range clamping, CAMSS Gen4
+256-byte sizeimage alignment, and Iris VPU35 AV1/10-bit clock scaling.
 
 Signed-off-by: TB378FC Maintainer <maintainer@tb378fc.local>
 ---
+ .../media/i2c/dongwoon,dw9807-vcm.yaml        |  13 +
  drivers/media/i2c/Kconfig                     |  10 +
  drivers/media/i2c/Makefile                    |   1 +
+ drivers/media/i2c/dw9807-vcm.c                | 170 ++--
  drivers/media/i2c/gc08a8.c                    | 902 ++++++++++++++++++
  drivers/media/i2c/ov13b10.c                   |  74 +-
  .../platform/qcom/camss/camss-vfe-gen4.c      |   6 +-
  .../media/platform/qcom/camss/camss-video.c   |   6 +
  .../media/platform/qcom/camss/camss-video.h   |   1 +
- 7 files changed, 998 insertions(+), 2 deletions(-)
+ .../platform/qcom/iris/iris_vpu_common.c      |  14 +-
+ 10 files changed, 1134 insertions(+), 63 deletions(-)
  create mode 100644 drivers/media/i2c/gc08a8.c
 
+diff --git a/Documentation/devicetree/bindings/media/i2c/dongwoon,dw9807-vcm.yaml b/Documentation/devicetree/bindings/media/i2c/dongwoon,dw9807-vcm.yaml
+index aae246ca3fc..d8cf79b7f77 100644
+--- a/Documentation/devicetree/bindings/media/i2c/dongwoon,dw9807-vcm.yaml
++++ b/Documentation/devicetree/bindings/media/i2c/dongwoon,dw9807-vcm.yaml
+@@ -21,6 +21,19 @@ properties:
+   reg:
+     maxItems: 1
+ 
++  vdd-supply:
++    description: Optional voltage supply for the voice coil actuator.
++
++  dongwoon,focus-range:
++    $ref: /schemas/types.yaml#/definitions/uint32-array
++    description:
++      Safe minimum and maximum 10-bit DAC focus positions for the lens module.
++    minItems: 2
++    maxItems: 2
++    items:
++      minimum: 0
++      maximum: 1023
++
+ required:
+   - compatible
+   - reg
 diff --git a/drivers/media/i2c/Kconfig b/drivers/media/i2c/Kconfig
 index 06a38d2ec8c..99d1d360207 100644
 --- a/drivers/media/i2c/Kconfig
@@ -53,6 +81,277 @@ index 2aabe5a91d2..f9b6c3d81cb 100644
  obj-$(CONFIG_VIDEO_GC2145) += gc2145.o
  obj-$(CONFIG_VIDEO_HI556) += hi556.o
  obj-$(CONFIG_VIDEO_HI846) += hi846.o
+diff --git a/drivers/media/i2c/dw9807-vcm.c b/drivers/media/i2c/dw9807-vcm.c
+index d119d7100e2..2581adec2c7 100644
+--- a/drivers/media/i2c/dw9807-vcm.c
++++ b/drivers/media/i2c/dw9807-vcm.c
+@@ -7,6 +7,7 @@
+ #include <linux/iopoll.h>
+ #include <linux/module.h>
+ #include <linux/pm_runtime.h>
++#include <linux/regulator/consumer.h>
+ #include <media/v4l2-ctrls.h>
+ #include <media/v4l2-device.h>
+ 
+@@ -39,9 +40,13 @@
+ #define MAX_RETRY		10
+ 
+ struct dw9807_device {
++	u32 focus_min;
++	u32 focus_max;
+ 	struct v4l2_ctrl_handler ctrls_vcm;
+ 	struct v4l2_subdev sd;
++	struct regulator *vdd;
+ 	u16 current_val;
++	bool parked;
+ };
+ 
+ static inline struct dw9807_device *sd_to_dw9807_vcm(
+@@ -75,16 +80,14 @@ static int dw9807_i2c_check(struct i2c_client *client)
+ 
+ static int dw9807_set_dac(struct i2c_client *client, u16 data)
+ {
+-	const char tx_data[3] = {
+-		DW9807_MSB_ADDR, ((data >> 8) & 0x03), (data & 0xff)
+-	};
+-	int val, ret;
+-
+ 	/*
+-	 * According to the datasheet, need to check the bus status before we
+-	 * write VCM position. This ensure that we really write the value
+-	 * into the register
++	 * GT9772B/DW9807-compatible modules latch the position only when MSB is
++	 * written in its own I2C transfer followed by LSB; a 3-byte burst is ignored.
+ 	 */
++	const char tx_msb[2] = { DW9807_MSB_ADDR, (data >> 8) & 0x03 };
++	const char tx_lsb[2] = { DW9807_LSB_ADDR, data & 0xff };
++	int val, ret;
++
+ 	ret = readx_poll_timeout(dw9807_i2c_check, client, val, val <= 0,
+ 			DW9807_CTRL_DELAY_US, MAX_RETRY * DW9807_CTRL_DELAY_US);
+ 
+@@ -97,12 +100,16 @@ static int dw9807_set_dac(struct i2c_client *client, u16 data)
+ 		return ret ? -EBUSY : val;
+ 	}
+ 
+-	/* Write VCM position to registers */
+-	ret = i2c_master_send(client, tx_data, sizeof(tx_data));
++	/* Write VCM position: MSB first, then LSB, as separate transfers */
++	ret = i2c_master_send(client, tx_msb, sizeof(tx_msb));
+ 	if (ret < 0) {
+-		dev_err(&client->dev,
+-			"I2C write MSB fail ret=%d\n", ret);
++		dev_err(&client->dev, "I2C write MSB fail ret=%d\n", ret);
++		return ret;
++	}
+ 
++	ret = i2c_master_send(client, tx_lsb, sizeof(tx_lsb));
++	if (ret < 0) {
++		dev_err(&client->dev, "I2C write LSB fail ret=%d\n", ret);
+ 		return ret;
+ 	}
+ 
+@@ -163,7 +170,9 @@ static int dw9807_init_controls(struct dw9807_device *dev_vcm)
+ 	v4l2_ctrl_handler_init(hdl, 1);
+ 
+ 	v4l2_ctrl_new_std(hdl, ops, V4L2_CID_FOCUS_ABSOLUTE,
+-			  0, DW9807_MAX_FOCUS_POS, DW9807_FOCUS_STEPS, 0);
++			  dev_vcm->focus_min, dev_vcm->focus_max,
++			  DW9807_FOCUS_STEPS,
++			  (dev_vcm->focus_min + dev_vcm->focus_max) / 2);
+ 
+ 	dev_vcm->sd.ctrl_handler = hdl;
+ 	if (hdl->error) {
+@@ -178,12 +187,34 @@ static int dw9807_init_controls(struct dw9807_device *dev_vcm)
+ static int dw9807_probe(struct i2c_client *client)
+ {
+ 	struct dw9807_device *dw9807_dev;
++	u32 range[2];
+ 	int rval;
+ 
+ 	dw9807_dev = devm_kzalloc_obj(&client->dev, *dw9807_dev);
+-	if (dw9807_dev == NULL)
++	if (!dw9807_dev)
+ 		return -ENOMEM;
+ 
++	dw9807_dev->vdd = devm_regulator_get_optional(&client->dev, "vdd");
++	if (IS_ERR(dw9807_dev->vdd)) {
++		rval = PTR_ERR(dw9807_dev->vdd);
++		dw9807_dev->vdd = NULL;
++		if (rval != -ENODEV)
++			return dev_err_probe(&client->dev, rval,
++					     "failed to get vdd regulator\n");
++	}
++
++	dw9807_dev->focus_min = 0;
++	dw9807_dev->focus_max = DW9807_MAX_FOCUS_POS;
++	if (!of_property_read_u32_array(client->dev.of_node,
++					"dongwoon,focus-range", range, 2)) {
++		dw9807_dev->focus_min = min_t(u32, range[0], DW9807_MAX_FOCUS_POS);
++		dw9807_dev->focus_max = min_t(u32, range[1], DW9807_MAX_FOCUS_POS);
++		if (dw9807_dev->focus_max <= dw9807_dev->focus_min)
++			dw9807_dev->focus_max = DW9807_MAX_FOCUS_POS;
++		dev_info(&client->dev, "focus range %u..%u\n",
++			 dw9807_dev->focus_min, dw9807_dev->focus_max);
++	}
++
+ 	v4l2_i2c_subdev_init(&dw9807_dev->sd, client, &dw9807_ops);
+ 	dw9807_dev->sd.flags |= V4L2_SUBDEV_FL_HAS_DEVNODE;
+ 	dw9807_dev->sd.internal_ops = &dw9807_int_ops;
+@@ -202,9 +233,13 @@ static int dw9807_probe(struct i2c_client *client)
+ 	if (rval < 0)
+ 		goto err_cleanup;
+ 
+-	pm_runtime_set_active(&client->dev);
++	/*
++	 * The actuator shares the camera rail, which may be off at probe time.
++	 * Start suspended so the first open() powers the rail instead of leaving
++	 * runtime PM latched in an error state.
++	 */
++	pm_runtime_set_suspended(&client->dev);
+ 	pm_runtime_enable(&client->dev);
+-	pm_runtime_idle(&client->dev);
+ 
+ 	return 0;
+ 
+@@ -222,69 +257,80 @@ static void dw9807_remove(struct i2c_client *client)
+ 
+ 	pm_runtime_disable(&client->dev);
+ 
++	if (!pm_runtime_status_suspended(&client->dev) && dw9807_dev->vdd)
++		regulator_disable(dw9807_dev->vdd);
++
+ 	dw9807_subdev_cleanup(dw9807_dev);
+ }
+ 
+-/*
+- * This function sets the vcm position, so it consumes least current
+- * The lens position is gradually moved in units of DW9807_CTRL_STEPS,
+- * to make the movements smoothly.
+- */
+-static int __maybe_unused dw9807_vcm_suspend(struct device *dev)
++static void dw9807_dac_ramp(struct i2c_client *client, unsigned int from,
++			    unsigned int val)
++{
++	while (from != val) {
++		if (from < val)
++			from = min(from + DW9807_CTRL_STEPS, val);
++		else
++			from = max(from, DW9807_CTRL_STEPS) - DW9807_CTRL_STEPS;
++
++		if (dw9807_set_dac(client, from))
++			return;
++		usleep_range(DW9807_CTRL_DELAY_US, DW9807_CTRL_DELAY_US + 10);
++	}
++}
++
++static int __maybe_unused dw9807_vcm_runtime_suspend(struct device *dev)
+ {
+ 	struct i2c_client *client = to_i2c_client(dev);
+ 	struct v4l2_subdev *sd = i2c_get_clientdata(client);
+ 	struct dw9807_device *dw9807_dev = sd_to_dw9807_vcm(sd);
+-	const char tx_data[2] = { DW9807_CTL_ADDR, 0x01 };
+-	int ret, val;
++	const char tx_data[2] = { DW9807_CTL_ADDR, 0x00 };
+ 
+-	for (val = dw9807_dev->current_val & ~(DW9807_CTRL_STEPS - 1);
+-	     val >= 0; val -= DW9807_CTRL_STEPS) {
+-		ret = dw9807_set_dac(client, val);
+-		if (ret)
+-			dev_err_once(dev, "%s I2C failure: %d", __func__, ret);
+-		usleep_range(DW9807_CTRL_DELAY_US, DW9807_CTRL_DELAY_US + 10);
+-	}
++	/*
++	 * Let the lens relax when the rail drops rather than driving it into
++	 * the mechanical near stop; remember to ramp back on the next open().
++	 */
++	if (dw9807_dev->current_val)
++		dw9807_dev->parked = true;
+ 
+-	/* Power down */
+-	ret = i2c_master_send(client, tx_data, sizeof(tx_data));
+-	if (ret < 0) {
+-		dev_err(&client->dev, "I2C write CTL fail ret = %d\n", ret);
+-		return ret;
+-	}
++	if (i2c_master_send(client, tx_data, sizeof(tx_data)) < 0)
++		dev_dbg(&client->dev, "power-down write failed\n");
++
++	if (dw9807_dev->vdd)
++		regulator_disable(dw9807_dev->vdd);
+ 
+ 	return 0;
+ }
+ 
+-/*
+- * This function sets the vcm position to the value set by the user
+- * through v4l2_ctrl_ops s_ctrl handler
+- * The lens position is gradually moved in units of DW9807_CTRL_STEPS,
+- * to make the movements smoothly.
+- */
+-static int  __maybe_unused dw9807_vcm_resume(struct device *dev)
++static int __maybe_unused dw9807_vcm_runtime_resume(struct device *dev)
+ {
+ 	struct i2c_client *client = to_i2c_client(dev);
+ 	struct v4l2_subdev *sd = i2c_get_clientdata(client);
+ 	struct dw9807_device *dw9807_dev = sd_to_dw9807_vcm(sd);
+ 	const char tx_data[2] = { DW9807_CTL_ADDR, 0x00 };
+-	int ret, val;
++	int ret;
+ 
+-	/* Power on */
+-	ret = i2c_master_send(client, tx_data, sizeof(tx_data));
+-	if (ret < 0) {
+-		dev_err(&client->dev, "I2C write CTL fail ret = %d\n", ret);
+-		return ret;
++	if (dw9807_dev->vdd) {
++		ret = regulator_enable(dw9807_dev->vdd);
++		if (ret)
++			return ret;
++		usleep_range(1000, 2000);
+ 	}
+ 
+-	for (val = dw9807_dev->current_val % DW9807_CTRL_STEPS;
+-	     val < dw9807_dev->current_val + DW9807_CTRL_STEPS - 1;
+-	     val += DW9807_CTRL_STEPS) {
+-		ret = dw9807_set_dac(client, val);
+-		if (ret)
+-			dev_err_ratelimited(dev, "%s I2C failure: %d",
+-						__func__, ret);
+-		usleep_range(DW9807_CTRL_DELAY_US, DW9807_CTRL_DELAY_US + 10);
++	/*
++	 * Tolerate missing I2C ACK during early enumeration when the shared
++	 * sensor rails are still off so runtime PM does not latch in error.
++	 */
++	ret = i2c_master_send(client, tx_data, sizeof(tx_data));
++	if (ret < 0)
++		dev_dbg(&client->dev,
++			"actuator not answering yet (%d), will retry on write\n",
++			ret);
++
++	usleep_range(1000, 2000);
++
++	if (dw9807_dev->parked) {
++		dw9807_dev->parked = false;
++		dw9807_dac_ramp(client, 0, dw9807_dev->current_val);
+ 	}
+ 
+ 	return 0;
+@@ -299,8 +345,12 @@ static const struct of_device_id dw9807_of_table[] = {
+ MODULE_DEVICE_TABLE(of, dw9807_of_table);
+ 
+ static const struct dev_pm_ops dw9807_pm_ops = {
+-	SET_SYSTEM_SLEEP_PM_OPS(dw9807_vcm_suspend, dw9807_vcm_resume)
+-	SET_RUNTIME_PM_OPS(dw9807_vcm_suspend, dw9807_vcm_resume, NULL)
++	/*
++	 * Runtime PM only: avoid power-cycling the shared camera rail and
++	 * clicking the lens during system suspend/resume when camera is idle.
++	 */
++	SET_RUNTIME_PM_OPS(dw9807_vcm_runtime_suspend,
++			   dw9807_vcm_runtime_resume, NULL)
+ };
+ 
+ static struct i2c_driver dw9807_i2c_driver = {
 diff --git a/drivers/media/i2c/gc08a8.c b/drivers/media/i2c/gc08a8.c
 new file mode 100644
 index 00000000000..7f6a48af59c
@@ -1150,3 +1449,28 @@ index 69906409f46..61de17c7340 100644
  	unsigned int line_based;
  	bool frame_sync;
  	const struct camss_format_info *formats;
+diff --git a/drivers/media/platform/qcom/iris/iris_vpu_common.c b/drivers/media/platform/qcom/iris/iris_vpu_common.c
+index fcf060a72c4..ea990363e74 100644
+--- a/drivers/media/platform/qcom/iris/iris_vpu_common.c
++++ b/drivers/media/platform/qcom/iris/iris_vpu_common.c
+@@ -502,7 +502,19 @@ u64 iris_vpu3x_vpu4x_calculate_frequency(struct iris_inst *inst, size_t data_siz
+ 	if (inst->fw_caps[STAGE].value == STAGE_1)
+ 		vsp_cycles = vsp_cycles * 3;
+ 
+-	return max3(vpp_cycles, vsp_cycles, fw_cycles);
++	/*
++	 * Scale VPU clock headroom for AV1 (3x) and 10-bit (2x) bitstreams so
++	 * high-bitrate 4K decode does not stall under VPU35 firmware budgets.
++	 */
++	{
++		u64 freq = max3(vpp_cycles, vsp_cycles, fw_cycles);
++
++		if (inst->codec == V4L2_PIX_FMT_AV1)
++			freq *= 3;
++		if (inst->fw_caps[BIT_DEPTH].value == BIT_DEPTH_10)
++			freq *= 2;
++		return freq;
++	}
+ }
+ 
+ int iris_vpu_power_on(struct iris_core *core)

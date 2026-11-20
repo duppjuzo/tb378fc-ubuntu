@@ -1,6 +1,6 @@
-From 4a7d48521a78a9986782ad269faede25c8d33577 Mon Sep 17 00:00:00 2001
+From 1b04eeb1fbb36595e4d879f79d04249b7a5883ff Mon Sep 17 00:00:00 2001
 From: TB378FC Maintainer <maintainer@tb378fc.local>
-Date: Fri, 20 Nov 2026 20:55:21 +0800
+Date: Sat, 21 Nov 2026 00:48:48 +0800
 Subject: [PATCH] power: supply: qcom_battmgr: add Lenovo TB378FC quirks and
  diagnostics
 
@@ -15,14 +15,14 @@ Signed-off-by: TB378FC Maintainer <maintainer@tb378fc.local>
  2 files changed, 141 insertions(+)
 
 diff --git a/Documentation/devicetree/bindings/soc/qcom/qcom,pmic-glink.yaml b/Documentation/devicetree/bindings/soc/qcom/qcom,pmic-glink.yaml
-index 207bf666ed9..db76cdf9fe1 100644
+index 207bf666ed9..21a80c13d5d 100644
 --- a/Documentation/devicetree/bindings/soc/qcom/qcom,pmic-glink.yaml
 +++ b/Documentation/devicetree/bindings/soc/qcom/qcom,pmic-glink.yaml
 @@ -62,6 +62,16 @@ properties:
            - const: qcom,sm8550-pmic-glink
            - const: qcom,pmic-glink
  
-+      - description:
++      - description: |
 +          Lenovo TB378FC PMIC GLINK: battery power property does not match
 +          voltage/current, current is positive during discharge, and bounded
 +          native USB input current limits are supported.

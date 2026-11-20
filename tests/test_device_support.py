@@ -125,5 +125,17 @@ class TestInitramfsAndPackaging(unittest.TestCase):
             self.assertTrue((tree / link).parent.joinpath(target).resolve().exists())
 
 
+    def test_camera_vcm_udev_and_kconfig(self):
+        kcfg = (ROOT / 'kernel/configs/tb378fc.config').read_text(encoding='utf-8')
+        self.assertIn('CONFIG_VIDEO_DW9807_VCM=m', kcfg)
+        dma = (ROOT / 'packaging/device-support/tree/etc/udev/rules.d/82-tb378fc-dmaheap75.rules').read_text(encoding='utf-8')
+        self.assertIn('TAG+="uaccess"', dma)
+        v4l = (ROOT / 'packaging/device-support/tree/etc/udev/rules.d/60-persistent-v4l.rules').read_text(encoding='utf-8')
+        self.assertIn('KERNEL!="v4l-subdev*"', v4l)
+        fw = (ROOT / 'tools/install-tb378fc-firmware.py').read_text(encoding='utf-8')
+        self.assertIn('brhbtfw', fw)
+        self.assertIn('novatek_ts_fw.bin', fw)
+
+
 if __name__ == '__main__':
     unittest.main()

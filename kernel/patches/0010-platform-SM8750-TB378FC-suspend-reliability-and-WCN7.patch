@@ -1,0 +1,136 @@
+From b7a373fb17223be3df23649bc06779d3eacd3e32 Mon Sep 17 00:00:00 2001
+From: TB378FC Maintainer <maintainer@tb378fc.local>
+Date: Sat, 21 Nov 2026 00:48:49 +0800
+Subject: [PATCH] platform: SM8750/TB378FC suspend reliability and WCN7860 BT
+ firmware fallback
+
+1. Mark qcom,sm8750-tsens with no_irq_wake so thermal threshold crossings
+   while cooling do not spuriously wake SM8750 out of s2idle.
+2. Queue UCSI connector work on system_freezable_wq so late PMIC GLINK
+   events do not race device suspend.
+3. Allow QCA_WCN7860 to try upstream gngbtfw/gngbtnv first and fall back
+   automatically to stock Lenovo BTFM brhbtfw (.mbn/.tlv) + brhbtnv.
+
+Signed-off-by: TB378FC Maintainer <maintainer@tb378fc.local>
+---
+ drivers/bluetooth/btqca.c       | 25 ++++++++++++++++++++++++-
+ drivers/thermal/qcom/tsens-v2.c |  8 ++++++++
+ drivers/thermal/qcom/tsens.c    |  3 +++
+ drivers/thermal/qcom/tsens.h    |  3 ++-
+ drivers/usb/typec/ucsi/ucsi.c   |  2 +-
+ 5 files changed, 38 insertions(+), 3 deletions(-)
+
+diff --git a/drivers/bluetooth/btqca.c b/drivers/bluetooth/btqca.c
+index 0c3755777ae..2cc75c037b1 100644
+--- a/drivers/bluetooth/btqca.c
++++ b/drivers/bluetooth/btqca.c
+@@ -757,6 +757,7 @@ int qca_uart_setup(struct hci_dev *hdev, uint8_t baudrate,
+ 	u8 rom_ver = 0;
+ 	u32 soc_ver;
+ 	u16 boardid = 0;
++	bool wcn7860_use_brh = false;
+ 
+ 	bt_dev_dbg(hdev, "QCA setup on UART");
+ 
+@@ -854,6 +855,22 @@ int qca_uart_setup(struct hci_dev *hdev, uint8_t baudrate,
+ 		snprintf(config.fwname, sizeof(config.fwname),
+ 			 "qca/hpbtfw%02x.tlv", rom_ver);
+ 		err = qca_download_firmware(hdev, &config, soc_type, rom_ver);
++	} else if (err < 0 && !rampatch_name && soc_type == QCA_WCN7860) {
++		bt_dev_dbg(hdev, "QCA Failed to request file: %s (%d)",
++			   config.fwname, err);
++		snprintf(config.fwname, sizeof(config.fwname),
++			 "qca/brhbtfw%02x.mbn", rom_ver);
++		err = qca_download_firmware(hdev, &config, soc_type, rom_ver);
++		if (err < 0) {
++			bt_dev_dbg(hdev, "QCA Failed to request file: %s (%d)",
++				   config.fwname, err);
++			config.type = TLV_TYPE_PATCH;
++			snprintf(config.fwname, sizeof(config.fwname),
++				 "qca/brhbtfw%02x.tlv", rom_ver);
++			err = qca_download_firmware(hdev, &config, soc_type, rom_ver);
++		}
++		if (!err)
++			wcn7860_use_brh = true;
+ 	}
+ 
+ 	if (err < 0) {
+@@ -928,7 +945,8 @@ int qca_uart_setup(struct hci_dev *hdev, uint8_t baudrate,
+ 			break;
+ 		case QCA_WCN7860:
+ 			qca_get_nvm_name_by_board(config.fwname, sizeof(config.fwname),
+-				 "gngbtnv", soc_type, ver, rom_ver, boardid);
++						  wcn7860_use_brh ? "brhbtnv" : "gngbtnv",
++						  soc_type, ver, rom_ver, boardid);
+ 			break;
+ 		default:
+ 			snprintf(config.fwname, sizeof(config.fwname),
+@@ -941,6 +959,11 @@ int qca_uart_setup(struct hci_dev *hdev, uint8_t baudrate,
+ 		qca_get_nvm_name_by_board(config.fwname, sizeof(config.fwname),
+ 					  "hpnv", soc_type, ver, rom_ver, boardid);
+ 		err = qca_download_firmware(hdev, &config, soc_type, rom_ver);
++	} else if (err < 0 && !firmware_name && soc_type == QCA_WCN7860 &&
++		   !wcn7860_use_brh) {
++		qca_get_nvm_name_by_board(config.fwname, sizeof(config.fwname),
++					  "brhbtnv", soc_type, ver, rom_ver, boardid);
++		err = qca_download_firmware(hdev, &config, soc_type, rom_ver);
+ 	}
+ 
+ 	if (err < 0) {
+diff --git a/drivers/thermal/qcom/tsens-v2.c b/drivers/thermal/qcom/tsens-v2.c
+index 843dd29fad2..4ca9872989f 100644
+--- a/drivers/thermal/qcom/tsens-v2.c
++++ b/drivers/thermal/qcom/tsens-v2.c
+@@ -314,3 +314,11 @@ struct tsens_plat_data data_automotive_v2 = {
+ 	.fields		= tsens_v2_regfields,
+ 	.no_irq_wake = true,
+ };
++
++/* Prevent cooling-threshold TSENS interrupts from waking SM8750 from s2idle */
++struct tsens_plat_data data_sm8750 = {
++	.ops		= &ops_generic_v2,
++	.feat		= &tsens_v2_feat,
++	.fields		= tsens_v2_regfields,
++	.no_irq_wake	= true,
++};
+diff --git a/drivers/thermal/qcom/tsens.c b/drivers/thermal/qcom/tsens.c
+index 8e3bd9d7dfe..f3a882e2a2d 100644
+--- a/drivers/thermal/qcom/tsens.c
++++ b/drivers/thermal/qcom/tsens.c
+@@ -1238,6 +1238,9 @@ static const struct of_device_id tsens_table[] = {
+ 	}, {
+ 		.compatible = "qcom,tsens-v1",
+ 		.data = &data_tsens_v1,
++	}, {
++		.compatible = "qcom,sm8750-tsens",
++		.data = &data_sm8750,
+ 	}, {
+ 		.compatible = "qcom,tsens-v2",
+ 		.data = &data_tsens_v2,
+diff --git a/drivers/thermal/qcom/tsens.h b/drivers/thermal/qcom/tsens.h
+index a35b1531296..046a2d79286 100644
+--- a/drivers/thermal/qcom/tsens.h
++++ b/drivers/thermal/qcom/tsens.h
+@@ -678,7 +678,8 @@ extern const struct tsens_plat_data data_ipq5018;
+ extern struct tsens_plat_data data_8996, data_ipq8074, data_tsens_v2;
+ extern const struct tsens_plat_data data_ipq5332, data_ipq5424;
+ 
+-/* TSENS automotive targets */
++/* TSENS automotive and SM8750 no-irq-wake targets */
+ extern struct tsens_plat_data data_automotive_v2;
++extern struct tsens_plat_data data_sm8750;
+ 
+ #endif /* __QCOM_TSENS_H__ */
+diff --git a/drivers/usb/typec/ucsi/ucsi.c b/drivers/usb/typec/ucsi/ucsi.c
+index 16d97c4f092..2e7b7d17e7f 100644
+--- a/drivers/usb/typec/ucsi/ucsi.c
++++ b/drivers/usb/typec/ucsi/ucsi.c
+@@ -1576,7 +1576,7 @@ void ucsi_connector_change(struct ucsi *ucsi, u8 num)
+ 	con = &ucsi->connector[num - 1];
+ 
+ 	if (!test_and_set_bit(EVENT_PENDING, &ucsi->flags))
+-		schedule_work(&con->work);
++		queue_work(system_freezable_wq, &con->work);
+ }
+ EXPORT_SYMBOL_GPL(ucsi_connector_change);
+ 

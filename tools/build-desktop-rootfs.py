@@ -132,7 +132,7 @@ def stage_open_firmware(root: Path, open_fw_dir: Path) -> list[str]:
         "  - qcom/sm8750/tb378fc/adsp.mdt + adsp_dtb.mdt + adsp.b* (ADSP audio/sensors)\n"
         "  - novatek/tb378fc.bin                   (NT36536 SPI touchscreen firmware)\n"
         "  - aw88480_acf.bin                       (AW88480 quad speaker amp profile)\n"
-        "  - ath12k/WCN7860/hw2.0/* & qca/gngbt*   (WCN7860 Wi-Fi 7 & Bluetooth firmware)\n",
+        "  - ath12k/WCN7860/hw2.0/* & qca/{gng,brh}bt* (WCN7860 Wi-Fi 7 & Bluetooth firmware)\n",
         encoding="utf-8",
     )
     return staged
@@ -180,6 +180,12 @@ def verify_chroot(root: Path, kernel_release: str) -> dict:
         "/usr/lib/tb378fc/mesa/lib/libgallium-26.2.6.so",
         "/usr/lib/tb378fc/mesa/lib/libvulkan_freedreno.so",
         "/usr/lib/aarch64-linux-gnu/dri/v4l2_drv_video.so",
+        "/usr/lib/aarch64-linux-gnu/libcamera.so.0.7",
+        "/usr/lib/aarch64-linux-gnu/libcamera-base.so.0.7",
+        "/usr/lib/aarch64-linux-gnu/libcamera/ipa/ipa_soft_simple.so",
+        "/usr/lib/aarch64-linux-gnu/gstreamer-1.0/libgstlibcamera.so",
+        "/usr/libexec/libcamera/v4l2-compat.so",
+        "/usr/libexec/libcamera/soft_ipa_proxy",
     )
     ldd_results = {}
     for lib in ldd_targets:
@@ -197,6 +203,10 @@ def verify_chroot(root: Path, kernel_release: str) -> dict:
     assert (root / "lib/firmware/qcom/gen80000_sqe.fw").is_file()
     assert (root / "lib/firmware/qcom/gen80000_gmu.bin").is_file()
     assert (root / "lib/firmware/qcom/vpu/vpu35_p4_s7.mbn").is_file()
+    assert (root / "usr/lib/aarch64-linux-gnu/libcamera/ipa/ipa_soft_simple.so.sign").is_file()
+    assert (root / "usr/share/libcamera/ipa/simple/ov13b10.yaml").is_file()
+    assert (root / f"lib/modules/{kernel_release}/kernel/drivers/media/i2c/dw9807-vcm.ko").is_file()
+    assert (root / "etc/udev/rules.d/60-persistent-v4l.rules").is_file()
 
     # 5. Ensure no machine-specific state leaked
     mid = root / "etc/machine-id"
@@ -239,7 +249,7 @@ def main() -> int:
     out_dir.mkdir(parents=True, exist_ok=True)
 
     debs = sorted(args.debs_dir.resolve().glob("tb378fc-*.deb"))
-    if len(debs) < 7:
+    if len(debs) < 8:
         raise SystemExit(f"Expected 7 tb378fc-*.deb packages in {args.debs_dir}, found {[d.name for d in debs]}")
 
     # Identify kernel release from tb378fc-kernel-image deb
@@ -316,7 +326,7 @@ def main() -> int:
         for cdrom in (root / "etc/apt/sources.list.d").glob("*cdrom*"):
             cdrom.unlink()
 
-        # Copy all 7 TB378FC debs into chroot staging dir
+        # Copy all TB378FC debs into chroot staging dir
         deb_stage = root / ".tb378fc-debs"
         deb_stage.mkdir(parents=True, exist_ok=True)
         chroot_deb_args = []

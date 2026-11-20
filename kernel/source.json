@@ -11,12 +11,13 @@
       "kernel/patches/0001-drm-panel-add-Lenovo-TB378FC-Novatek-NT36526-dual-DS.patch",
       "kernel/patches/0002-display-add-TB378FC-panel-bias-regulator-and-dual-AW.patch",
       "kernel/patches/0003-drm-msm-preserve-direct-scanout-VBIF-arbitration-and.patch",
-      "kernel/patches/0004-ASoC-TB378FC-add-AW88480-amps-WCD939x-fixes-and-ADSP.patch",
+      "kernel/patches/0004-ASoC-TB378FC-add-AW88480-amps-WCD939x-fixes-q6apm-ch.patch",
       "kernel/patches/0005-Input-nt36536-add-Lenovo-TB378FC-variant-and-trim-ID.patch",
       "kernel/patches/0006-power-supply-qcom_battmgr-add-Lenovo-TB378FC-quirks-.patch",
-      "kernel/patches/0007-media-TB378FC-add-GC08A8-OV13B10-board-support-and-C.patch",
+      "kernel/patches/0007-media-TB378FC-GC08A8-OV13B10-DW9807-VCM-CAMSS-align-.patch",
       "kernel/patches/0008-tty-serial-qcom_geni_serial-clamp-negative-highest-s.patch",
-      "kernel/patches/0009-arm64-dts-qcom-add-Lenovo-Xiaoxin-Pad-Pro-GT-13-TB37.patch"
+      "kernel/patches/0009-arm64-dts-qcom-add-Lenovo-Xiaoxin-Pad-Pro-GT-13-TB37.patch",
+      "kernel/patches/0010-platform-SM8750-TB378FC-suspend-reliability-and-WCN7.patch"
     ],
     "upstream_config_fragments": [
       "arch/arm64/configs/sm8750-netfilter.config",

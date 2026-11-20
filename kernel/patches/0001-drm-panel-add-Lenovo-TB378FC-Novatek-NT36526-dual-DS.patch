@@ -1,23 +1,23 @@
-From eb52d8942c40c23aba7af8f0a89856a080207580 Mon Sep 17 00:00:00 2001
+From f008f9a80ab30858c964b9c4cdc0b75392c53421 Mon Sep 17 00:00:00 2001
 From: TB378FC Maintainer <maintainer@tb378fc.local>
-Date: Fri, 20 Nov 2026 20:55:20 +0800
+Date: Sat, 21 Nov 2026 00:48:48 +0800
 Subject: [PATCH] drm/panel: add Lenovo TB378FC Novatek NT36526 dual-DSI DSC
  panel
 
 Port CSOT NT36526 dual-DSI DSC panel driver to Linux 7.4 using
 devm_drm_panel_add() and MIPI_DSI_MODE_DSC_ALL_SLICES_IN_PKT, and
-expose all three native refresh modes (120Hz preferred, 60Hz, 144Hz).
+expose all four native refresh modes (120Hz preferred, 60/90/144Hz).
 
 Signed-off-by: TB378FC Maintainer <maintainer@tb378fc.local>
 ---
  drivers/gpu/drm/panel/Kconfig                 |  11 +
  drivers/gpu/drm/panel/Makefile                |   1 +
- drivers/gpu/drm/panel/panel-novatek-nt36526.c | 416 ++++++++++++++++++
- 3 files changed, 428 insertions(+)
+ drivers/gpu/drm/panel/panel-novatek-nt36526.c | 429 ++++++++++++++++++
+ 3 files changed, 441 insertions(+)
  create mode 100644 drivers/gpu/drm/panel/panel-novatek-nt36526.c
 
 diff --git a/drivers/gpu/drm/panel/Kconfig b/drivers/gpu/drm/panel/Kconfig
-index ede906bb787..cf4b94eac2e 100644
+index ede906bb787..c8e77bb5e4f 100644
 --- a/drivers/gpu/drm/panel/Kconfig
 +++ b/drivers/gpu/drm/panel/Kconfig
 @@ -690,6 +690,17 @@ config DRM_PANEL_NOVATEK_NT36532
@@ -32,7 +32,7 @@ index ede906bb787..cf4b94eac2e 100644
 +	select DRM_DISPLAY_DSC_HELPER
 +	select DRM_DISPLAY_HELPER
 +	help
-+	  Native 3504x2190 dual-DSI DSC video-mode panel with 60/120/144 Hz
++	  Native 3504x2190 dual-DSI DSC video-mode panel with 60/90/120/144 Hz
 +	  timings on Lenovo Xiaoxin Pad Pro GT 13 (TB378FC).
 +
  config DRM_PANEL_NOVATEK_NT36536
@@ -52,10 +52,10 @@ index da5175909d5..52138462c97 100644
  obj-$(CONFIG_DRM_PANEL_NOVATEK_NT36672E) += panel-novatek-nt36672e.o
 diff --git a/drivers/gpu/drm/panel/panel-novatek-nt36526.c b/drivers/gpu/drm/panel/panel-novatek-nt36526.c
 new file mode 100644
-index 00000000000..1a3bbd74d67
+index 00000000000..cd479294540
 --- /dev/null
 +++ b/drivers/gpu/drm/panel/panel-novatek-nt36526.c
-@@ -0,0 +1,416 @@
+@@ -0,0 +1,429 @@
 +// SPDX-License-Identifier: GPL-2.0-only
 +/*
 + * Lenovo TB378FC / CSOT NT36526 dual-DSI panel driver
@@ -286,12 +286,12 @@ index 00000000000..1a3bbd74d67
 +
 +/*
 + * Native Android DT timing modes for CSOT NT36526 dual-DSI DSC panel.
-+ * All three modes share virtually the same compressed DSI link clock
-+ * (~183 MHz per link), enabling glitch-free continuous DFPS switching.
++ * All four modes (120/60/90/144 Hz) share virtually the same compressed
++ * DSI link clock (~183 MHz per link), enabling glitch-free seamless DFPS.
 + */
 +static const struct drm_display_mode novatek_nt36526_modes[] = {
 +	{
-+		/* 120 Hz (default preferred boot mode) */
++		/* 120 Hz (default preferred boot mode, dfps-timings@0) */
 +		.clock = 1117910,
 +		.hdisplay = 3504,
 +		.hsync_start = 3658,
@@ -304,7 +304,7 @@ index 00000000000..1a3bbd74d67
 +		.type = DRM_MODE_TYPE_DRIVER | DRM_MODE_TYPE_PREFERRED,
 +	},
 +	{
-+		/* 60 Hz (extended VFP, identical compressed link clock) */
++		/* 60 Hz (extended VFP, dfps-timings@1) */
 +		.clock = 1117910,
 +		.hdisplay = 3504,
 +		.hsync_start = 3658,
@@ -317,7 +317,20 @@ index 00000000000..1a3bbd74d67
 +		.type = DRM_MODE_TYPE_DRIVER,
 +	},
 +	{
-+		/* 144 Hz (tighter HFP/VBP, matched compressed link clock) */
++		/* 90 Hz (dfps-timings@4: per-link hfp=84 hpw=16 hbp=288, vbp=157) */
++		.clock = 915620,
++		.hdisplay = 3504,
++		.hsync_start = 3672,
++		.hsync_end = 3704,
++		.htotal = 4280,
++		.vdisplay = 2190,
++		.vsync_start = 2216,
++		.vsync_end = 2220,
++		.vtotal = 2377,
++		.type = DRM_MODE_TYPE_DRIVER,
++	},
++	{
++		/* 144 Hz (tighter HFP/VBP, dfps-timings@3) */
 +		.clock = 1205533,
 +		.hdisplay = 3504,
 +		.hsync_start = 3624,

@@ -1,6 +1,6 @@
-From 25010e9dfdf7b59ef2255bfacec5f7cf170c5f2d Mon Sep 17 00:00:00 2001
+From 613c0da3ac12089f498e9d4f2218f356c6e2ec08 Mon Sep 17 00:00:00 2001
 From: TB378FC Maintainer <maintainer@tb378fc.local>
-Date: Fri, 20 Nov 2026 20:55:22 +0800
+Date: Sat, 21 Nov 2026 00:48:49 +0800
 Subject: [PATCH] arm64: dts: qcom: add Lenovo Xiaoxin Pad Pro GT 13 (TB378FC)
 
 Add the unified Linux 7.4 devicetree for Lenovo Xiaoxin Pad Pro GT 13
@@ -12,9 +12,9 @@ thermal zones, ABL root identity restore, and 8GB-safe ramoops.
 Signed-off-by: TB378FC Maintainer <maintainer@tb378fc.local>
 ---
  arch/arm64/boot/dts/qcom/Makefile             |    1 +
- .../qcom/sm8750-lenovo-tb378fc-camera.dtsi    |  220 +++
+ .../qcom/sm8750-lenovo-tb378fc-camera.dtsi    |  228 +++
  .../boot/dts/qcom/sm8750-lenovo-tb378fc.dts   | 1557 +++++++++++++++++
- 3 files changed, 1778 insertions(+)
+ 3 files changed, 1786 insertions(+)
  create mode 100644 arch/arm64/boot/dts/qcom/sm8750-lenovo-tb378fc-camera.dtsi
  create mode 100644 arch/arm64/boot/dts/qcom/sm8750-lenovo-tb378fc.dts
 
@@ -32,10 +32,10 @@ index 1beaeb54edf..679ee591d90 100644
  dtb-$(CONFIG_ARCH_QCOM)	+= sm8750-xiaomi-piano-desktop.dtb
 diff --git a/arch/arm64/boot/dts/qcom/sm8750-lenovo-tb378fc-camera.dtsi b/arch/arm64/boot/dts/qcom/sm8750-lenovo-tb378fc-camera.dtsi
 new file mode 100644
-index 00000000000..fc83d622c0f
+index 00000000000..09206a0317d
 --- /dev/null
 +++ b/arch/arm64/boot/dts/qcom/sm8750-lenovo-tb378fc-camera.dtsi
-@@ -0,0 +1,220 @@
+@@ -0,0 +1,228 @@
 +// SPDX-License-Identifier: BSD-3-Clause
 +/*
 + * Lenovo TB378FC dual camera subsystem (GC08A8 front + OV13B10 rear),
@@ -124,6 +124,13 @@ index 00000000000..fc83d622c0f
 +&cci0_i2c0 {
 +	clock-frequency = <400000>;
 +
++	vcm: lens@c {
++		compatible = "dongwoon,dw9807-vcm";
++		reg = <0x0c>;
++		vdd-supply = <&vreg_l16b_cam>;
++		dongwoon,focus-range = <0 400>;
++	};
++
 +	camera@36 {
 +		compatible = "lenovo,tb378fc-ov13b10", "ovti,ov13b10";
 +		reg = <0x36>;
@@ -138,6 +145,7 @@ index 00000000000..fc83d622c0f
 +		avdd-supply = <&vreg_l8b_cam>;
 +		dvdd-supply = <&vreg_l11b_cam>;
 +		vaf-supply = <&vreg_l16b_cam>;
++		lens-focus = <&vcm>;
 +		orientation = <1>;
 +		rotation = <90>;
 +

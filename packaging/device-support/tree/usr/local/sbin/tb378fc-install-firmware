@@ -18,6 +18,7 @@ TARGETS = {
     "adsp.mdt": "qcom/sm8750/tb378fc/adsp.mdt",
     "adsp_dtb.mdt": "qcom/sm8750/tb378fc/adsp_dtb.mdt",
     "tb378fc.bin": "novatek/tb378fc.bin",
+    "novatek_ts_fw.bin": "novatek/tb378fc.bin",
     "aw88480_acf.bin": "aw88480_acf.bin",
 }
 
@@ -51,7 +52,7 @@ def main() -> int:
             rel_dst = f"qcom/sm8750/tb378fc/{name}"
         elif name in ("amss.bin", "m3.bin", "board-2.bin", "regdb.bin", "qdss.cfg", "aux_ucode.bin", "bdwlan.elf"):
             rel_dst = f"ath12k/WCN7860/hw2.0/{name}"
-        elif name.startswith(("gngbtfw", "gngbtnv")):
+        elif name.startswith(("gngbtfw", "gngbtnv", "brhbtfw", "brhbtnv")):
             rel_dst = f"qca/{name}"
         if rel_dst:
             dst = fw_root / rel_dst
@@ -68,7 +69,7 @@ def main() -> int:
         print(f"  [OK] /lib/firmware/{rel} ({sz} B, sha256={digest}...)")
     print(f"Installed {len(installed)} firmware files into {fw_root}")
 
-    missing = [rel for rel in TARGETS.values() if not (fw_root / rel).is_file()]
+    missing = [rel for rel in dict.fromkeys(TARGETS.values()) if not (fw_root / rel).is_file()]
     if missing:
         print("Still missing vendor-signed TB378FC firmware files:")
         for m in missing:

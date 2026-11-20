@@ -1,6 +1,6 @@
-From 7e3697ed6b7815f86598631e45302e0fafeffafb Mon Sep 17 00:00:00 2001
+From 71b554d7b3a0f04f61a19d5c22643556b45a7b3e Mon Sep 17 00:00:00 2001
 From: TB378FC Maintainer <maintainer@tb378fc.local>
-Date: Fri, 20 Nov 2026 20:55:21 +0800
+Date: Sat, 21 Nov 2026 00:48:48 +0800
 Subject: [PATCH] drm/msm: preserve direct scanout, VBIF arbitration, and
  native seamless DFPS
 
@@ -10,7 +10,7 @@ Subject: [PATCH] drm/msm: preserve direct scanout, VBIF arbitration, and
    controller state on DMA timeouts.
 3. Implement native in-tree seamless video-mode DFPS (TIMING_DB_MODE +
    TIMING_FLUSH + DPU INTF timing update) for matching-clock refresh
-   switches (60/120/144Hz), eliminating out-of-tree struct-prefix hooks.
+   switches (60/90/120/144Hz), eliminating out-of-tree struct-prefix hooks.
 
 Signed-off-by: TB378FC Maintainer <maintainer@tb378fc.local>
 ---
