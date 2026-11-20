@@ -1,85 +1,70 @@
-# 双系统、安装与恢复
+# 双系统、真机验证与恢复
 
-## 支持边界
+## 安全红线
 
-已测硬件：联想小新 Pad Pro GT 13 / TB378FC，8GB + 256GB，SM8750P。已测 Android 为 ColorOS 16 移植版；其产品属性伪装为 OPPO，不能作为硬件选板依据。Bootloader 已解锁，Android 中使用 KernelSU。
+1. **先备原厂镜像**：任何操作前，提前在本机外部保存当前槽位原厂 `boot.img`、`init_boot.img`、`vendor_boot.img`、`dtbo.img` 以及本机提取的闭源固件，**严禁提交到 Git**。
+2. **永远先用 `fastboot boot` 临时 RAM 验证**：新内核、DTB 或 initramfs 必须先通过 `tools/build-boot-v2.py` 打包为 Header v2 镜像并执行临时启动，确认屏幕、触摸、存储、网络与核心外设稳定后，再封装并写入 GKI v4 持久三件套。
+3. **不触碰未知分区表**：不要套用其他设备的分区表或他人的 AVB 签名镜像。
 
-本仓库提供实际实现源码及已验证布局说明，**当前没有通用首次安装器或可直接刷入的完整公共镜像**。原始分阶段脚本在 `port/`，依赖本地构建产物和设备输入，不应逐个猜测执行。其他容量与固件不能复用下方边界。
+---
 
-## 实测分区布局
+## 第一步：临时 RAM 验证（推荐，零分区写入）
 
-沿用一加项目的独立 Linux 根分区与同槽启动三件套轮换。主 UFS LUN 为 251456913408 字节、4096 字节逻辑扇区。
+1. 在本地使用本机提取的原厂 `vendor_boot` / `dtbo`，通过 `third_party/oneplus/tools/build-erhai-abl-symbols.py` 为编译产出的 `sm8750-lenovo-tb378fc.dtb` 添加 contained ABL overlay sink（切勿使用一加默认 base index）。
+2. 生成 `boot-v2.img`（初次排障可加 `--debug` 启用 `tb378fc.debug=1`）：
+   ```bash
+   python3 tools/build-boot-v2.py \
+     --kernel out/kernel-tb378fc/arch/arm64/boot/Image \
+     --dtb out/sm8750-lenovo-tb378fc-abl.dtb \
+     --initramfs out/initramfs.cpio.gz \
+     --mkbootimg /path/to/mkbootimg.py \
+     --root UUID=<你的ubuntu根分区UUID> \
+     --debug \
+     --output out/boot-v2
+   ```
+3. 平板进入 Fastboot 模式（`adb reboot bootloader` 或按键组合），在 Windows/Linux 主机执行：
+   ```bash
+   fastboot boot boot-v2.img
+   ```
+4. 验证要点：
+   - 正常亮屏进入桌面，`uname -r` 显示 `7.4.0-rc2-tb378fc-...` 且 `/proc/sys/kernel/tainted` 为 `0`；
+   - `dmesg | grep abl-root-identity` 确认已恢复 `lenovo,tb378fc`；
+   - 显示设置可原生无缝切换 **60 / 120 / 144Hz**；
+   - UFS、Wi-Fi 7、蓝牙、四扬声器、麦克风、前后摄、后置闪光灯（`tb378fc-torch`）、旋转与 `s2idle` 休眠正常；
+   - 若系统内仍是旧版未打补丁的 Mesa 出现多线纹理异常，可临时在用户级 override 中设置 `GALLIUM_THREAD=false`，升级到 `packaging/mesa/` 26.2.6 补丁版 Mesa 后即可移除。
 
-| 分区 | 实测位置 | 大小 |
-|---|---|---|
-| userdata | 第18项，LBA 6365608～40419071 | 139482988544字节，约129.90GiB |
-| ubuntu | 第19项，LBA 40419072～61390842 | 85900374016字节，约80.00GiB |
+---
 
-首次准备保留 userdata 起点和原身份，缩短其末端，再创建 Linux 分区；**Android 应用、账户和文件会清除**，metadata 同时重新初始化。此操作不是对 Android 加密文件系统的无损缩容。其他17个主LUN分区与其他LUN布局保持原状。
+## 第二步：封装并安装 GKI v4 三件套（确认临时启动稳定后）
 
-以上数值是本次安装记录，不是任意设备的分区命令。重新准备设备时，应使用 `sgdisk` 根据自己的 GPT、userdata GUID/属性和磁盘尺寸生成方案；不能复制本机 GPT、校准或 Android 启动镜像。
+1. 在平板 Ubuntu 内安装本次产出的 `.deb`（确保 `/lib/modules/<new-release>` 就位）：
+   ```bash
+   sudo dpkg -i tb378fc-kernel-image_*.deb tb378fc-device-support_*.deb tb378fc-audio_*.deb tb378fc-device_*.deb
+   ```
+2. 在主机端生成并签名本机 AVB GKI v4 三件套（不加 `--debug`，保持生产环境默认关闭 USB 调试）：
+   ```bash
+   python3 tools/build-boot-triplet.py \
+     --kernel out/kernel-tb378fc/arch/arm64/boot/Image \
+     --dtb out/sm8750-lenovo-tb378fc-abl.dtb \
+     --initramfs out/initramfs.cpio.gz \
+     --stock /path/to/private/stock-triplet \
+     --key /path/to/private/avb.pem \
+     --mkbootimg /path/to/mkbootimg.py \
+     --avbtool /path/to/avbtool.py \
+     --root UUID=<你的ubuntu根分区UUID> \
+     --output out/triplet-v7.4
+   ```
+3. 参照 [`switch/README.md`](../switch/README.md) 使用 `tb378fc-switch` 在活动 A 槽安全轮换 Ubuntu / Android 启动三件套。
 
-Linux 分区顶层结构：
+---
 
-```text
-.tb378fc-root                  内容为 tb378fc-root79
-layers/minimal.squashfs
-layers/minimal.standard.squashfs
-upper/                         系统与用户的可写层
-work/                          OverlayFS 工作目录
-switch/
-  android/                     本机原 Android 三件套与 SHA256SUMS
-  ubuntu/                      本机签名 Ubuntu 三件套与 SHA256SUMS
-  state.json
+## 紧急恢复原厂 Android
+
+如果任何时候无法进入系统，长按电源键+音量下进入 Fastboot，刷回提前备份的本机原厂三件套即可完整恢复 Android（不丢数据）：
+
+```bash
+fastboot flash boot_a /path/to/private/stock/boot.img
+fastboot flash init_boot_a /path/to/private/stock/init_boot.img
+fastboot flash vendor_boot_a /path/to/private/stock/vendor_boot.img
+fastboot reboot
 ```
-
-`initramfs/init` 从 `/etc/root-uuid` 找到 ext4 分区，挂载下层和持久可写层后交给 systemd。普通启动不再通过电脑下载约3.6GB RAM根系统。
-
-## 启动格式
-
-- `boot.img`：Android header v4，仅 Image 和内核参数。
-- `init_boot.img`：header v4，空的 gzip newc archive。
-- `vendor_boot.img`：header v4，实际 initramfs 和匹配 Lenovo ABL 的 DTB。
-- 三个文件均按本机原厂分区大小补齐 AVB footer；rollback index 从自己的原镜像读取。
-- 内核版本字段使用 `15.0.0`、补丁日期 `2026-07`，与参考实现一致。遗漏这两个字段的候选在本机被 ABL 标记 unbootable，补齐后正常启动。
-
-已测分区容量为 boot/vendor_boot 各96MiB、init_boot 8MiB。不是将 `fastboot boot` 使用的 header v2 镜像直接刷入 boot。`vbmeta`、ABL、recovery 和 B槽未为双系统切换而修改。
-
-## 已安装系统的日常切换
-
-Ubuntu 打开“切换到 ColorOS”，通过 pkexec 授权。Android 在 KernelSU 模块中点“操作”。它们均调用 `switch/tb378fc-switch`，将目标的三个镜像写入活动 A 槽，完整读回SHA后重启。
-
-切换器命令：
-
-```sh
-sudo tb378fc-switch status
-sudo tb378fc-switch verify
-sudo tb378fc-switch to-android
-```
-
-Android 执行的是模块中的同一脚本，经 KernelSU BusyBox 运行。Android 会临时挂载 `ubuntu` 分区，使用完卸载。切换器不自动重新备份启动镜像；使用已有、与当前固件相符的本机备份。OTA/KernelSU 更换启动链后，应先更新本机档案，不能将旧三件套混入新的系统。
-
-公开模板将设备身份放到私有配置文件，不硬编码本次设备标识。打包：
-
-```sh
-python3 tools/package-switch.py \
-  --serial YOUR_ADB_SERIAL --soc-serial YOUR_NUMERIC_SOC_SERIAL \
-  --output out/tb378fc-switch.zip
-```
-
-生成的 `.device.conf` 在 Ubuntu 安装到 `/etc/tb378fc-switch.conf`，root:root、0600；ZIP 自带同样配置供 KernelSU 模块使用。不要提交该文件。配置化模板仅完成离线测试；实机往返使用的是相同切换逻辑的私有v81构建。
-
-安装模块后需要再次启动 Android 才会完成激活。本次已确认模块 `enabled=true`、`action=true`、`update=false`，不需要用户重复安装。
-
-## 返回 Android 的电脑恢复入口
-
-若切换中断，使用**自己的原镜像**恢复同一活动槽整组三件套。在 bootloader 中确认当前槽后执行，文件名为本机档案中的 `boot.img`、`init_boot.img`、`vendor_boot.img`：
-
-```sh
-fastboot -s YOUR_ADB_SERIAL flash boot_a private/android/boot.img
-fastboot -s YOUR_ADB_SERIAL flash init_boot_a private/android/init_boot.img
-fastboot -s YOUR_ADB_SERIAL flash vendor_boot_a private/android/vendor_boot.img
-fastboot -s YOUR_ADB_SERIAL reboot
-```
-
-若 A 槽已经标记不可启动，核对三件套完整性后才重设活动 A。此恢复不删除 Ubuntu 分区，也不等于恢复原厂分区布局。不要为了恢复启动再次格式化 userdata；设备仍含非原厂镜像时不要锁回 Bootloader。

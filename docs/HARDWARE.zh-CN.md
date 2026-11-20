@@ -1,31 +1,28 @@
-# 硬件支持与已知限制
+# 硬件支持状态（Linux 7.4 统一架构）
 
-以下为 2026-10-19 在一台 8GB + 256GB TB378FC 上完成的实测。短测仅证明表中范围，不代表全负载、完整休眠或长期日用验收。
+目标设备：**联想小新 Pad Pro GT 13（TB378FC / Qualcomm SM8750P / 8GB + 256GB / 已解锁 Bootloader）**。
 
-| 项目 | 实测结果 | 限制 |
+## 硬件模块与 Linux 7.4 适配清单
+
+| 硬件模块 | 驱动与设备树实现 | 7.4 统一架构变更与状态 |
 |---|---|---|
-| 内部启动与存储 | 六个 UFS LUN，80GiB ext4 持久根，普通重启及双系统往返 | 根目录由两个 SquashFS 下层与 ext4 upper/work 组成。 |
-| 内屏 | 3504×2190，双 DSI/DSC，整屏双背光 | 驱动仍含板级诊断和启动兼容处理。 |
-| 刷新率 | 60、120、144Hz 切换；144Hz 下熄屏点亮通过 | 使用固定内核布局的外置模块，不能任意升级内核；长期回归未完成。 |
-| 触摸 | 原厂上升沿 IRQ 后，桌面、锁屏与屏幕键盘基本跟手 | 曾有明显漏点；最终修复不是单纯提高 CPU 性能。多点长时回归未全测。 |
-| 手动亮度 | 两颗 AW99706B 同步控制 | 桌面显示电源策略采用背光关断；不等于深度休眠。 |
-| GPU OpenGL | Adreno 830v1，OpenGL 4.6、GLES 3.2，真实绘制及 GNOME 加速 | 使用独立 Mesa 26.2.3；仍保留禁用 Gallium 线程的临时规避。 |
-| GPU Vulkan | Turnip Vulkan 1.4 枚举、离屏三角形、Wayland vkcube 1200 帧 | 按应用显式选择独立 ICD；未做一致性认证或长期游戏测试。 |
-| GPU 监控 | 独立工具可读型号、频率和 devfreq 忙碌率 | Resources 未原生支持 msm 的这些接口；忙碌率为采样区间结果。 |
-| 视频编解码 | H.264 1080p60 编码/解码 60 帧；HEVC 编码、HEVC/VP9/AV1 解码短测 | 后者多数为 640×360/30fps；不能扩展为所有编码档位/分辨率。浏览器硬解未单独验收。 |
-| Wi-Fi | WCN7860，5GHz EHT160/双流，Wi-Fi 7 接入点联网 | 6GHz、MLO、漫游和休眠重连未完整验收。使用本机匹配固件/板级数据。 |
-| 蓝牙 | 固件启动、扫描、JBL Go 4 配对及 A2DP 实际出声 | 当前采用从 SoC 身份派生的本地地址，不是原厂地址。 |
-| 扬声器 | 四颗 AW88480，用户确认响度可用、音质正常；音量条和按键正常 | 原机最大响度/保护算法未完整复刻。 |
-| 麦克风 | 第一路原生 PCM 和桌面 PipeWire 录音有效；与低音量测试音相关 | 第二路有效声学收音未证明；不能称双麦完整支持。 |
-| 前摄 | GC08A8，经 CAMSS、libcamera 软件 ISP 出图 | 色彩、分辨率和自动白平衡仍有限制；按使用者要求停止质量开发。 |
-| 后摄 | OV13B10 出图，方向已修正 | 自动对焦、闪光联动和质量优化未完成。 |
-| 闪光灯 | 主线驱动绑定，手电/短闪/超时软件路径及普通用户入口通过 | 实体出光未独立验收；不标为完整相机闪光支持。 |
-| 自动旋转 | 四个方向与触摸均由用户确认 | 长时间采样和休眠恢复未全测。 |
-| 自动亮度 | 不在适配范围 | 用户明确放弃光照传感器。 |
-| USB-C host | 扩展坞插入鼠标可用，自动角色切换 | USB 键盘实际按键、USB3 存储、正反插组合未全测。 |
-| USB-C 外屏 | DP Alt Mode，1080p60 扩展桌面，可拖窗口 | DP 音频、更多分辨率及连续热插拔未全测。 |
-| 电池/充电 | 桌面电量显示、PPS 重新插接后外部功率计约 40～45W | 功率随电量/温度变化；电脑 USB 供电不等于快充。 |
-| 电源键/锁屏 | 背光关开、密码页唤醒、最终触摸均正常 | s2idle 曾实际返回；长期待机、完整系统休眠及恢复组合未验收。 |
-| 手写笔/磁吸键盘 | 存在相关驱动输入 | 笔、压感、笔充电、磁吸键盘与触控板不计为已支持。 |
+| 显示面板 | `panel-novatek-nt36526` + `tb378fc-panel-bias` + 双路 `tb378fc-aw99706b` | 适配 7.4 `MIPI_DSI_MODE_DSC_ALL_SLICES_IN_PKT`；3504×2190 双 DSI DSC |
+| 60/120/144Hz 刷新率 | `panel-novatek-nt36526` + `drm/msm` 原生无缝 DFPS | 彻底淘汰外置 `refresh-live76.ko` 结构体勾子，合入主线内核态双缓冲切频 |
+| 触控与手写笔 | `nt36536` (`lenovo,tb378fc-nvt`，上升沿 IRQ，Trim ID `0x15/0x23/0x65/0x03`) | 继承上游深睡防卡死修复；保留 TB378FC 原生压感上限 4095 与严格 ID 校验 |
+| GPU (Adreno 830v1) | `drm/msm` 7.4 + Mesa 26.2.6 (`packaging/mesa/`) | 继承 7.4 GMU/shrinker/hw fence/LLCC 32 切片修复；Mesa 同步 `freedreno-thread-safe-tex-seqno.patch`，移除 `GALLIUM_THREAD=false` |
+| 内部存储 (UFS) | `ufs-qcom` + `phy-qcom-qmp-ufs` + `ext4`（全部内置 `=y`） | 废除早期 DT overlay 与外置 `.ko`，直出设备树 + 继承 7.4 MCQ 与防死锁修复 |
+| Wi-Fi 7 & 蓝牙 | WCN7860 (`ath12k` + `hci_uart` QCA / `uart14`) | 内置编译，保留 `qcom_geni_serial` 负别名修复与动态蓝牙地址服务 |
+| 音频（四扬声器 + 麦） | 四路 `aw88480` (GPIO-I2C) + `wcd939x` SoundWire + AudioReach Q6APM | 合入标准 `/lib/modules`；继承 7.4 ADSP 首包防丢与 GLINK 死锁修复；保留 WCD939x IRQ 生命周期与联想原生 ADC 映射 |
+| 相机（前 8MP / 后 13MP） | `gc08a8` (CSIPHY1) + `ov13b10` (CSIPHY5) + `qcom-camss` + `phy-qcom-mipi-csi2` | 迁移至 Linux 7.4 独立 CSI-2 PHY 图谱；保留 OV13B10 联想 VAF 上电时序与 CAMSS Gen4 256B `sizeimage` 对齐 |
+| 后置闪光灯 / 手电筒 | `leds-qcom-flash` (`pm8550_flash` `led-0`, 通道 1+4, 默认关闭) | 内置设备树，淘汰 `live-flash-overlay70.ko`；`tb378fc-torch.socket` 改为 `video` 组 + 动态 seat0 鉴权 |
+| 视频编解码 (Iris) | `qcom-iris` (`vpu35_4v.mbn`) | 继承上游 7.4 Iris VPU 修复 |
+| USB-C & DP Alt Mode | `dwc3-qcom` + `ucsi_glink` + `wcd939x-usbss` + `mdss_dp0` (HBR3) | 继承上游 7.4 DP AUX 重试与稳定性修复 |
+| 电池与充电 | `qcom_battmgr` (`lenovo,tb378fc-pmic-glink`) | 保留电流符号反转、0..900mA 有界 USB ICL 写入与只读 `0x60` 诊断；绝不混入一加/小米快充驱动 |
+| 温控与诊断 | SM8750P 118°C CPU 被动降频 + 8GB 安全 `ramoops@c2000000` (4 MiB) + Gunyah 看门狗 | 首次补齐 Oryon CPU 被动热节流；显式关闭 `CONFIG_CRYPTO_DEV_QCE` 保障 `s2idle` CX 断电 |
+| 平台安全与容器 | `CONFIG_SECURITY_APPARMOR=y`、`CONFIG_NF_TABLES=m`、Rust Binder (Waydroid)、Gunyah VM | 同步上游 5 个公共 Kconfig 片段，Snap 恢复完整 AppArmor 沙箱 |
 
-Snap 服务在早期 RAM 桌面被屏蔽，导致 Firefox / Thunderbird 无法启动；安装版已恢复并实测应用启动。当前内核没有 AppArmor，Snap 运行在降级隔离模式。`packaging/setup-owner.sh` 负责恢复 Snap 并由所有者本地设置管理员密码，不发布测试账户密码。
+## 已知边界与注意事项
+
+- **真机回归待测**：本次重构已在 WSL2 ext4 环境完成完整 ARM64 交叉编译、`dtc` 设备树校验、Kconfig 隔离断言与离线单测，**尚未在实体 TB378FC 平板上完成真机回归**，请务必先通过 `fastboot boot boot-v2.img` 验证。
+- **固件需自行提取**：仓库不含任何闭源固件（`adsp`、`gen80000_zap`、`vpu35_4v`、`novatek/tb378fc.bin`、`aw88480-native-music.acf`、WCN7860 固件等），详见 [`firmware/`](../firmware/)。
+- **未适配项**：光照传感器、原厂磁吸键盘/笔充（注意：一加/小米相关驱动严禁混入）暂不计为已支持。

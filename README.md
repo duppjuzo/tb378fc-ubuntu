@@ -1,67 +1,48 @@
-# Ubuntu for Lenovo Xiaoxin Pad Pro GT 13
+# Ubuntu for Lenovo Xiaoxin Pad Pro GT 13 (TB378FC)
 
-在联想小新 Pad Pro GT 13（**TB378FC / Snapdragon 8 Elite / SM8750P**）上运行 Ubuntu Desktop 26.04，使用 GNOME 50、Linux 7.2 和 Freedreno / Turnip 图形驱动。
+在联想小新 Pad Pro GT 13（**TB378FC / Snapdragon 8 Elite / SM8750P**）上运行 Ubuntu Desktop 26.04，基于统一主线 **Linux 7.4 (`sm8750/v7.4-dev`)**、模块化 Kconfig、Mesa 26.2.6 (Freedreno / Turnip) 与干净的 `.deb` 打包体系。
 
-本项目参考并改编 [OnePlus Pad 2 Pro mainline](https://github.com/yzddmr6/onepluspad-2pro-mainline) 的启动封装、设备集成和双系统切换设计。内核以其 [linux-sm8750-erhai](https://github.com/yzddmr6/linux-sm8750-erhai) 为基线，相机还参考了 [Y700 相关内核工作](https://github.com/h0cheung/tb322fc-linux-kernel)。完整来源见 [NOTICE](NOTICE.md)。
+本项目基于并同步上游 [OnePlus Pad 2 Pro mainline](https://github.com/yzddmr6/onepluspad-2pro-mainline) (`v0.12.1`) 与 [linux-sm8750-erhai](https://github.com/yzddmr6/linux-sm8750-erhai) (`sm8750/v7.4-dev`) 的 SM8750P 公共内核/图形/启动封装成果，同时**严格隔离所有一加/小米板级驱动**，仅保留 TB378FC 专属板级代码。完整来源见 [NOTICE](NOTICE.md)。
 
-## 获取与使用
+## 架构亮点（v0.2.0 现代化重构）
+
+- **单一统一内核（Linux 7.4-rc2）**：所有 TB378FC 板级改动拆分为 9 个清晰原子补丁（`kernel/patches/0001..0009-*.patch`），合入统一 `Image` + `sm8750-lenovo-tb378fc.dtb` + 标准 `/lib/modules/$(uname -r)`，彻底淘汰旧版 `7.2.0-tb378fc-wifi+` 与 6 个串行外置 `.ko` 热加载服务。
+- **原生内核态 60 / 120 / 144Hz 连续切频**：原外置 `refresh-live76` 结构体勾子已正式改写为 `panel-novatek-nt36526.c` + `drm/msm` 原生双缓冲连续 DFPS 补丁。
+- **模块化 Kconfig**：废除 5 份 9000 行全量 `.config`，改用 `defconfig` + 上游 `sm8750-{netfilter,peripherals,snap,virt,waydroid}.config` + 精简 `kernel/configs/tb378fc.config`，完整开启 `CONFIG_SECURITY_APPARMOR`、`CONFIG_NF_TABLES`、Rust Binder (Waydroid)、Gunyah 虚拟化、UFS/ext4/CAMSS/Iris/WCD939x/AW88480，并显式关闭 `CONFIG_CRYPTO_DEV_QCE` 与全部非 TB378FC 板级驱动。
+- **零单机硬编码与默认安全**：`packaging/device-support/tree/` 移除全部 `pad` / UID `1000` 硬编码（改用 `loginctl` 动态 seat0 会话发现与 `video` 组权限）；`initramfs/init` 默认关闭 `usb-diag` 与 `httpd:8081`，仅在显式传入内核参数 `tb378fc.debug=1` 时启用。
+- **Mesa 26.2.6 补丁同步**：同步上游 `v0.12.1` 12 个通用 Adreno 830v1 补丁（含 `freedreno-thread-safe-tex-seqno.patch` 根因修复，移除 `GALLIUM_THREAD=false` 规避项）。
+- **安全优先验证流程**：新增 `tools/build-boot-v2.py`（生成 Android header v2 临时 RAM 启动镜像），优先通过 `fastboot boot` 验证后再封装 GKI v4 持久三件套，提供无 root `tools/build-debs.py` 打包脚本与 GitHub Actions CI。
+
+## 文档入口
 
 | 入口 | 内容 |
 |---|---|
-| [硬件支持](docs/HARDWARE.zh-CN.md) | 已通过真机测试的功能和已知限制 |
-| [双系统、安装与恢复](docs/FLASHING.zh-CN.md) | 80GiB Ubuntu 布局、切换方式、恢复步骤 |
-| [构建指南](docs/BUILD.zh-CN.md) | 内核补丁、设备树、运行服务和启动镜像 |
-| [开发说明](docs/DEVELOPMENT.zh-CN.md) | 目录用途、历史脚本和后续维护 |
-| [验证记录](docs/VALIDATION.zh-CN.md) | 实测范围、版本和启动结果 |
-| [版本记录](CHANGELOG.md) | 初始源码整理版本 |
-
-**已验证配置**：8GB + 256GB TB378FC，已解锁 Bootloader，Android 16 ColorOS 移植系统。Android 的产品属性会伪装成 OPPO 型号，不能据此判断硬件。其他容量、固件及分区布局未验证。
-
-这是实际设备移植的**源码发布**。当前设备已完成内置安装及 Ubuntu → ColorOS → Ubuntu 往返；仓库不附带个人系统镜像、原厂启动备份、设备校准或签名私钥。完整桌面仍使用独立构建的运行模块，部分开发配方依赖中间产物；尚未提供面向任意设备的一键安装包或从零端到端构建验收。构建与安装文档明确列出这些边界。
-
-## 双系统切换
-
-Ubuntu 使用独立的约 80GiB 分区，Android 数据区约 130GiB。两个系统共用活动 **A 槽**的 `boot`、`init_boot`、`vendor_boot`，切换器将目标三件套整组写入、读回校验，再重启；另一组三件套保存在 Ubuntu 分区。
-
-| 当前系统 | 操作 |
-|---|---|
-| Ubuntu | 打开应用列表中的“切换到 ColorOS”，输入本机管理员密码。 |
-| ColorOS | 在 KernelSU 的 `TB378FC Ubuntu / ColorOS Switch` 模块中点“操作”。 |
-
-切换不重新分区或清空文件。首次划分 Ubuntu 空间会清除 Android 应用和文件，不能直接套用别人的分区表或设备镜像。详见 [安装与恢复](docs/FLASHING.zh-CN.md)。仓库没有通用默认用户密码，管理员账户由设备所有者设置。
-
-## 硬件概况
-
-| 功能 | 当前实测状态 |
-|---|---|
-| 内屏、背光、触摸 | 3504×2190 整屏；桌面及锁屏触摸正常，60 / 120 / 144Hz 已测。 |
-| GPU | Adreno 830v1；GNOME 硬件加速，OpenGL 4.6 / GLES 3.2；Turnip Vulkan 1.4 短测通过。 |
-| 无线 | Wi-Fi 7 EHT160 联网；蓝牙扫描、配对及 JBL 蓝牙音箱播放通过。 |
-| 音频 | 四路功放播放正常；音量条和音量键可用；第一路麦克风已验证。 |
-| 相机 | GC08A8 前摄 / OV13B10 后摄均可出图；分辨率、色彩与对焦仍有局限。 |
-| 视频 | Iris H.264 硬编硬解；HEVC 硬编及 HEVC / VP9 / AV1 硬解短测通过。 |
-| 旋转 | 四个方向画面及触摸已由用户确认。 |
-| USB-C | 外屏 1080p60 扩展桌面、扩展坞 USB 鼠标均已实测。 |
-| 充电 | PPS 外部功率计实测约 40～45W。 |
-| 电源 | 电源键熄屏与锁屏唤醒已测；长期待机功耗和完整休眠回归未完成。 |
-
-更多限制见[硬件支持表](docs/HARDWARE.zh-CN.md)。光照传感器不在本次适配范围。手写笔、磁吸键盘、DP 音频等未验证项不计为已支持。
+| [硬件支持](docs/HARDWARE.zh-CN.md) | 硬件模块状态、7.4 迁移清单与已知边界 |
+| [构建指南](docs/BUILD.zh-CN.md) | Linux 7.4 内核交叉编译、Mesa、initramfs、boot-v2 与 `.deb` 构建 |
+| [双系统、安装与恢复](docs/FLASHING.zh-CN.md) | `fastboot boot` 临时验证、ABL DTBO sink、GKI v4 切换与恢复 |
+| [开发说明](docs/DEVELOPMENT.zh-CN.md) | 目录规范、板级隔离红线与离线检查 |
+| [验证记录](docs/VALIDATION.zh-CN.md) | 实测范围与构建验收记录 |
+| [版本记录](CHANGELOG.md) | 架构演进与更新日志 |
 
 ## 源码结构
 
 ```text
-kernel/       固定内核基线、平台补丁、实测配置、最终主线设备树
-snapshots/    实际构建的外置模块源码，以及相机/音频修改补丁
-initramfs/    内部根分区挂载与关机交接
-packaging/    从最终安装系统整理的服务、UCM、桌面组件
-switch/       参考一加实现的同槽切换器与 KernelSU 模块模板
-tools/        源码准备、启动镜像封装、模块打包、离线验证
-port/         原始分阶段构建及调试配方，保留数字版本以便溯源
-firmware/     固件清单和自行提取说明，不附带本机私有数据
-third_party/  固定版本的参考代码和来源
-docs/         构建、安装、支持范围和验证说明
+kernel/       固定上游基线 (source.json)、Rust 工具链锁、9 个板级补丁 (0001..0009)、模块化 tb378fc.config
+initramfs/    最小化根分区挂载 (支持 tb378fc.root= 与 opt-in tb378fc.debug=1)
+packaging/
+  device-support/  无硬编码的 systemd 服务、动态会话助手、udev 规则、symlinks.json
+  audio/           AudioReach 拓扑源码 (Lenovo-TB378FC.m4)
+  camera/          libcamera TB378FC 补丁
+  mesa/            同步自上游 v0.12.1 的 Mesa 26.2.6 Adreno 830v1 补丁与校验锁
+  desktop/         Ubuntu 26.04 Desktop ARM64 固定层校验锁
+switch/       同活动槽 Ubuntu / Android 切换器与 KernelSU 模块模板
+tools/        prepare-kernel.py / build-kernel.sh / build-initramfs.sh / build-boot-v2.py / build-boot-triplet.py / build-debs.py / check-source.py
+tests/        device-support 权限与 sysfs 单元测试
+firmware/     本机闭源固件自行提取清单（仓库永不附带闭源固件、校准、密钥或原厂备份）
+third_party/  固定版本参考工具（AVB 签名与 ABL overlay sink 构建工具）
+docs/         中文构建、刷机、硬件与开发文档
 ```
 
 ## 许可与致谢
 
-设备适配和切换器按 GPL-2.0-only 发布；内核、GNOME、libcamera、Mesa 及其他继承代码保留各自原有许可与作者声明，具体见 [NOTICE](NOTICE.md)。感谢一加项目、Y700 社区和 Linux / Mesa / Ubuntu 上游开发者的工作。
+设备适配与切换器按 GPL-2.0-only 发布；内核、Mesa、libcamera 及第三方参考代码保留各自原有许可，见 [NOTICE](NOTICE.md)。感谢 OnePlus Pad 2 Pro mainline、Y700 社区及 Linux / Mesa / Ubuntu 上游开发者。

@@ -1,36 +1,25 @@
-# 开发与目录约定
+# 开发与维护规范
 
-## 当前源码的两层结构
+## 强约束与红线
 
-`kernel/`、`snapshots/`、`initramfs/`、`packaging/`和`switch/`描述最终安装版本；`port/`保留原始分阶段配方。数字如68、73、76、79、81是开发阶段标识，**不是要求依次执行的安装步骤**。
+1. **绝不混入一加/小米专属板级驱动**：禁止启用或移植 `SC8547A` / SUPERVOOC / `CHARGER_ERHAI_PPS` / `CHARGER_CPS8601` / `CHARGER_XIAOMI_MCA` / `KEYBOARD_ONEPLUS_POGO` / `SC820CS` / `SC1300CS` / `CN3927` / `KTZ8866` / `AW88261` / `DRM_PANEL_NOVATEK_NT36536` / `HID_XIAOMI`。`tools/build-kernel.sh` 与 CI 会自动断言这些配置均为关闭状态。
+2. **隐私与版权红线**：严禁向 Git 提交闭源固件、本机校准数据、AVB 私钥、原厂镜像备份、用户密码或设备序列号。
+3. **无硬编码用户**：`packaging/device-support/tree/` 中禁止出现 `pad`、`/run/user/1000`、`7.2.0-tb378fc-wifi+`、`GALLIUM_THREAD=false` 等硬编码，`tools/check-source.py` 会在提交和 CI 阶段拦截回归。
+4. **开发与编译环境**：Linux 内核源码与构建输出必须位于原生大小写敏感 ext4 文件系统，禁止在 Windows NTFS (`/mnt/c/...`) 下解包或编译内核。
 
-基础Image固定在usbc70b版本，后续功能主要通过独立模块、设备树和用户态集成。因此既要保存内核差异，也要保留`snapshots/`中的最终模块源码。只导出主内核Git diff会遗漏相机、麦克风和刷新率修复。
+## 目录约定
 
-`snapshots/patches/libcamera-final.patch`直接比较最终源码和0.7.0原始压缩包；不把多轮追加的实验patch当作一份可重复应用的最终补丁。`kernel/patches/`来自Linux构建机，不包含Windows内核检出的大小写文件冲突。
+- `kernel/patches/0001..0009-*.patch`：按子系统拆分的原子补丁，直接 `git am` 到 `kernel/source.json` 固定的上游提交。
+- `kernel/configs/tb378fc.config`：仅包含 TB378FC 差异与隔离约束，与上游 `sm8750-*.config` 组合合并。
+- `packaging/device-support/`：最终安装的文本配置、动态会话助手脚本与相对路径 `symlinks.json`，由 `tools/build-debs.py` 打包。
+- `packaging/mesa/`：同步自上游 `onepluspad-2pro-mainline` 的通用 Adreno 830v1 Mesa 26.2.6 补丁。
+- 历史阶段脚本与旧外置模块快照已从当前分支移除，需要溯源时可直接查阅 Git 历史（`main` 分支）。
 
-## 几个实际问题的处理
+## 本地验证命令
 
-- **触控漏点**：对照原Android确认触摸IRQ为上升沿，替换原来的低电平触发后，桌面和锁屏均明显改善。不能仅靠屏幕键盘补丁解释修复。
-- **背光半屏**：本机双AW99706B，两个控制器必须同步初始化和亮度。
-- **60/144Hz黑屏**：最终采用连续DPU/DSI时序调整，原失败的断流模式实验不作为安装入口。
-- **持久启动退回fastboot**：三件套已按v4拆分且具备AVB footer；继续对照一加封装器补齐OS版本/补丁日期后启动成功。
-- **长时间等桌面**：早期RAM环境每次从电脑下载系统；内部根系统安装后实测约45秒到graphical.target。
-- **Firefox/邮箱无法打开**：RAM阶段屏蔽Snap服务的设置被带入安装版；解除屏蔽后程序可启动。
-- **用户无sudo/无密码**：最终安装在设备本地设置管理员账户；公共源码没有共享默认密码。
-
-## 发布内容
-
-Git只保存文本源码、补丁、配置模板和摘要。固件/校准、原厂镜像、个人根系统、Wi-Fi连接、蓝牙配对、SSH密钥、AVB私钥、音乐及录像保留在所有者本地。
-
-发布中将物理设备绑定移至私有`device.conf`；`port/`中原有单机配方的身份被替换成不可直接使用的占位符。`switch/tb378fc-switch`才是可配置的公开切换入口。
-
-## 检查
-
-```sh
+```bash
 python3 tools/check-source.py
-sudo python3 tools/validation/test_switch.py
+python3 -m unittest discover -s tests -v
+python3 tools/validation/test_switch.py
+shellcheck initramfs/init initramfs/shutdown initramfs/usb-diag tools/build-kernel.sh tools/build-initramfs.sh
 ```
-
-第二项只使用临时目录中的普通文件，验证整组三件套轮换、dry-run、损坏拒绝和中断标记，不访问设备。GitHub Actions执行这些离线检查；它不宣称编译完整桌面镜像或连接真机。
-
-当前还没有正式DEB版本依赖、升级回滚、无调试通道的干净安装镜像和完整休眠长期验收。维护时应保留这些限制，避免把本机短测写成任意TB378FC固件的全功能支持。

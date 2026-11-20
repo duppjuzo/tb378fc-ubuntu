@@ -1,0 +1,63 @@
+name: TB378FC CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  source-and-unit-checks:
+    name: Source, ShellCheck, Unit & Packaging Checks
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install lint & packaging tools
+        run: sudo apt-get update && sudo apt-get install -y shellcheck dpkg-dev
+      - name: Source syntax, symlink & hygiene checks
+        run: python3 tools/check-source.py
+      - name: ShellCheck scripts
+        run: |
+          shellcheck initramfs/init initramfs/shutdown initramfs/usb-diag             tools/build-kernel.sh tools/build-initramfs.sh             packaging/device-support/tree/usr/local/libexec/tb378fc-zram             packaging/device-support/tree/usr/local/libexec/tb378fc-mesa-hardware-probe             packaging/device-support/tree/usr/local/bin/tb378fc-desktop-init             packaging/device-support/tree/usr/local/bin/tb378fc-gpu-monitor             packaging/device-support/tree/usr/lib/systemd/user-environment-generators/80-tb378fc-mesa             packaging/device-support/tree/usr/lib/systemd/system-sleep/tb378fc-suspend-cycle
+      - name: Run device-support unit tests
+        run: python3 -m unittest discover -s tests -v
+      - name: Run switch logic offline tests
+        run: python3 tools/validation/test_switch.py
+      - name: Smoke-test rootless .deb packaging
+        run: |
+          python3 tools/build-debs.py --version 0.2.0-ci --output /tmp/ci-debs
+          for deb in /tmp/ci-debs/*.deb; do
+            dpkg-deb -I "$deb"
+            dpkg-deb -c "$deb"
+          done
+
+  kernel-patches-and-dts:
+    name: Kernel Patch Apply, Kconfig & ARM64 DTS/Driver Compile
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install ARM64 cross toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu bc bison flex             libssl-dev libelf-dev device-tree-compiler python3
+      - name: Prepare patched linux-sm8750-erhai v7.4-dev tree
+        run: python3 tools/prepare-kernel.py --kernel-dir /tmp/linux-sm8750-erhai
+      - name: Configure modular Kconfig and assert board isolation
+        run: |
+          mkdir -p /tmp/kout
+          make -C /tmp/linux-sm8750-erhai O=/tmp/kout ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- defconfig
+          /tmp/linux-sm8750-erhai/scripts/kconfig/merge_config.sh -m -O /tmp/kout             /tmp/kout/.config             /tmp/linux-sm8750-erhai/arch/arm64/configs/sm8750-netfilter.config             /tmp/linux-sm8750-erhai/arch/arm64/configs/sm8750-peripherals.config             /tmp/linux-sm8750-erhai/arch/arm64/configs/sm8750-snap.config             /tmp/linux-sm8750-erhai/arch/arm64/configs/sm8750-virt.config             kernel/configs/tb378fc.config
+          make -C /tmp/linux-sm8750-erhai O=/tmp/kout ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- olddefconfig
+          grep -Fxq 'CONFIG_SECURITY_APPARMOR=y' /tmp/kout/.config
+          grep -Fxq 'CONFIG_NF_TABLES=m' /tmp/kout/.config
+          grep -Fxq 'CONFIG_DRM_PANEL_TB378FC_NT36526=y' /tmp/kout/.config
+          grep -Fxq 'CONFIG_SND_SOC_AW88480=m' /tmp/kout/.config
+          grep -Fxq 'CONFIG_VIDEO_GC08A8=m' /tmp/kout/.config
+          ! grep -Eq '^CONFIG_(CHARGER_SC8547A|CHARGER_ERHAI_PPS|CHARGER_CPS8601|CHARGER_XIAOMI_MCA|KEYBOARD_ONEPLUS_POGO|SND_SOC_AW88261|BACKLIGHT_KTZ8866|DRM_PANEL_NOVATEK_NT36536|VIDEO_SC1300CS|VIDEO_SC820CS|HID_XIAOMI|CRYPTO_DEV_QCE)=(y|m)$' /tmp/kout/.config
+      - name: Compile TB378FC DTB and board driver objects
+        run: |
+          make -C /tmp/linux-sm8750-erhai O=/tmp/kout ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- -j"$(nproc)"             qcom/sm8750-lenovo-tb378fc.dtb             drivers/gpu/drm/panel/panel-novatek-nt36526.o             drivers/regulator/tb378fc-panel-bias.o             drivers/video/backlight/tb378fc-aw99706b.o             drivers/input/touchscreen/nt36536/nt36536.o             drivers/power/supply/qcom_battmgr.o             drivers/tty/serial/qcom_geni_serial.o             drivers/media/i2c/gc08a8.o             drivers/media/i2c/ov13b10.o             sound/soc/codecs/aw88480.o             sound/soc/codecs/wcd939x.o             sound/soc/codecs/wcd939x-sdw.o             sound/soc/qcom/qdsp6/q6apm-dai.o
