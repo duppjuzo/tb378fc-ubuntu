@@ -106,5 +106,11 @@ class TestAcfAndAudioTopology(unittest.TestCase):
         self.assertTrue((REPO / "tools/build-sensors-deb.py").is_file())
 
 
+    def test_kernel_source_json_patches_match_disk(self):
+        import json
+        meta = json.loads((REPO / "kernel/source.json").read_text(encoding="utf-8"))
+        disk = [p.relative_to(REPO).as_posix() for p in sorted((REPO / "kernel/patches").glob("*.patch"))]
+        self.assertEqual(meta["kernel"]["patches"], disk)
+
 if __name__ == "__main__":
     unittest.main()

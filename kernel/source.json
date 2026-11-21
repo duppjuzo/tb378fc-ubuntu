@@ -11,7 +11,7 @@
       "kernel/patches/0001-drm-panel-add-Lenovo-TB378FC-Novatek-NT36526-dual-DS.patch",
       "kernel/patches/0002-display-add-TB378FC-panel-bias-regulator-and-dual-AW.patch",
       "kernel/patches/0003-drm-msm-preserve-direct-scanout-VBIF-arbitration-and.patch",
-      "kernel/patches/0004-ASoC-TB378FC-add-AW88480-amps-WCD939x-fixes-q6apm-ch.patch",
+      "kernel/patches/0004-ASoC-TB378FC-add-AW88480-amps-SoundWire-WCD939x-fixe.patch",
       "kernel/patches/0005-Input-nt36536-add-Lenovo-TB378FC-variant-and-trim-ID.patch",
       "kernel/patches/0006-power-supply-qcom_battmgr-add-Lenovo-TB378FC-quirks-.patch",
       "kernel/patches/0007-media-TB378FC-GC08A8-OV13B10-DW9807-VCM-CAMSS-align-.patch",
@@ -32,7 +32,7 @@
   },
   "upstream_integration_reference": {
     "repository": "https://github.com/yzddmr6/onepluspad-2pro-mainline.git",
-    "tag": "v0.12.1",
-    "commit": "fad774fa045256d63cf6b11ae9be7a1dcb58efb5"
+    "tag": "v0.12.2",
+    "commit": "7b862f9066dbc53f8646e7513188c7adb4400280"
   }
 }
