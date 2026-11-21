@@ -1,6 +1,6 @@
-From b7a373fb17223be3df23649bc06779d3eacd3e32 Mon Sep 17 00:00:00 2001
+From 2775cfbd12cbb67ef81a66381b7fe428d1463ff9 Mon Sep 17 00:00:00 2001
 From: TB378FC Maintainer <maintainer@tb378fc.local>
-Date: Sat, 21 Nov 2026 00:48:49 +0800
+Date: Sat, 21 Nov 2026 23:50:49 +0800
 Subject: [PATCH] platform: SM8750/TB378FC suspend reliability and WCN7860 BT
  firmware fallback
 

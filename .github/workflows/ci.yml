@@ -50,7 +50,7 @@ jobs:
         run: |
           mkdir -p /tmp/kout
           make -C /tmp/linux-sm8750-erhai O=/tmp/kout ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- defconfig
-          /tmp/linux-sm8750-erhai/scripts/kconfig/merge_config.sh -m -O /tmp/kout             /tmp/kout/.config             /tmp/linux-sm8750-erhai/arch/arm64/configs/sm8750-netfilter.config             /tmp/linux-sm8750-erhai/arch/arm64/configs/sm8750-peripherals.config             /tmp/linux-sm8750-erhai/arch/arm64/configs/sm8750-snap.config             /tmp/linux-sm8750-erhai/arch/arm64/configs/sm8750-virt.config             kernel/configs/tb378fc.config
+          /tmp/linux-sm8750-erhai/scripts/kconfig/merge_config.sh -m -O /tmp/kout             /tmp/kout/.config             /tmp/linux-sm8750-erhai/arch/arm64/configs/sm8750-netfilter.config             /tmp/linux-sm8750-erhai/arch/arm64/configs/sm8750-peripherals.config             /tmp/linux-sm8750-erhai/arch/arm64/configs/sm8750-snap.config             /tmp/linux-sm8750-erhai/arch/arm64/configs/sm8750-virt.config             /tmp/linux-sm8750-erhai/arch/arm64/configs/sm8750-desktop.config             kernel/configs/tb378fc.config
           make -C /tmp/linux-sm8750-erhai O=/tmp/kout ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- olddefconfig
           grep -Fxq 'CONFIG_SECURITY_APPARMOR=y' /tmp/kout/.config
           grep -Fxq 'CONFIG_NF_TABLES=m' /tmp/kout/.config

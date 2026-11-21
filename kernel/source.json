@@ -5,7 +5,7 @@
     "repository": "https://github.com/yzddmr6/linux-sm8750-erhai.git",
     "branch": "sm8750/v7.4-dev",
     "baseline_tag": "v7.4-rc2",
-    "commit": "da4b783e34bd05d7451a6f904fbf567af1215f99",
+    "commit": "658c139dd9f3f51acd019545febb65f7a7956be2",
     "dtb": "arch/arm64/boot/dts/qcom/sm8750-lenovo-tb378fc.dtb",
     "patches": [
       "kernel/patches/0001-drm-panel-add-Lenovo-TB378FC-Novatek-NT36526-dual-DS.patch",
@@ -24,6 +24,7 @@
       "arch/arm64/configs/sm8750-peripherals.config",
       "arch/arm64/configs/sm8750-snap.config",
       "arch/arm64/configs/sm8750-virt.config",
+      "arch/arm64/configs/sm8750-desktop.config",
       "arch/arm64/configs/sm8750-waydroid.config"
     ],
     "board_config_fragment": "kernel/configs/tb378fc.config",

@@ -47,6 +47,7 @@ fragments=(
 	"$src/arch/arm64/configs/sm8750-peripherals.config"
 	"$src/arch/arm64/configs/sm8750-snap.config"
 	"$src/arch/arm64/configs/sm8750-virt.config"
+	"$src/arch/arm64/configs/sm8750-desktop.config"
 )
 if [[ $with_waydroid == 1 ]]; then
 	fragments+=("$src/arch/arm64/configs/sm8750-waydroid.config")

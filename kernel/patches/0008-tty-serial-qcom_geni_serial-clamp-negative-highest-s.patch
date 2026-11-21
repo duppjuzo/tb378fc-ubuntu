@@ -1,6 +1,6 @@
-From 37b1d982b1a3df3e80ccfa857555b9628be1f236 Mon Sep 17 00:00:00 2001
+From 6f797098ad4c98a7e8967113c34d82c37a50c2e6 Mon Sep 17 00:00:00 2001
 From: TB378FC Maintainer <maintainer@tb378fc.local>
-Date: Sat, 21 Nov 2026 00:48:49 +0800
+Date: Sat, 21 Nov 2026 23:50:48 +0800
 Subject: [PATCH] tty: serial: qcom_geni_serial: clamp negative highest serial
  alias
 

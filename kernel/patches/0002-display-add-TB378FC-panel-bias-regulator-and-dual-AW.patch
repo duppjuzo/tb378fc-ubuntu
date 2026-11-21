@@ -1,6 +1,6 @@
-From aa3c9e8d9e10b6272f250a273df56f97885f4eb3 Mon Sep 17 00:00:00 2001
+From c2b98e7a6ed34ef246a54dd4634bc077a3517af5 Mon Sep 17 00:00:00 2001
 From: TB378FC Maintainer <maintainer@tb378fc.local>
-Date: Sat, 21 Nov 2026 00:48:48 +0800
+Date: Sat, 21 Nov 2026 23:50:47 +0800
 Subject: [PATCH] display: add TB378FC panel bias regulator and dual AW99706B
  backlight
 

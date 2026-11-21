@@ -1,6 +1,6 @@
-From 47c1597bff881d5cb76c3f8fdf9c5ba23591f073 Mon Sep 17 00:00:00 2001
+From 8956204a271afd55a3c9f259e2e60a27b8ce334e Mon Sep 17 00:00:00 2001
 From: TB378FC Maintainer <maintainer@tb378fc.local>
-Date: Sat, 21 Nov 2026 00:48:48 +0800
+Date: Sat, 21 Nov 2026 23:50:47 +0800
 Subject: [PATCH] ASoC: TB378FC: add AW88480 amps, WCD939x fixes, q6apm chmap,
  and ADSP defer
 

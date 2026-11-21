@@ -1,6 +1,6 @@
-From 613c0da3ac12089f498e9d4f2218f356c6e2ec08 Mon Sep 17 00:00:00 2001
+From f0d5486a4baefdeeb07f1f090f436ae75e343b9b Mon Sep 17 00:00:00 2001
 From: TB378FC Maintainer <maintainer@tb378fc.local>
-Date: Sat, 21 Nov 2026 00:48:49 +0800
+Date: Sat, 21 Nov 2026 23:50:48 +0800
 Subject: [PATCH] arm64: dts: qcom: add Lenovo Xiaoxin Pad Pro GT 13 (TB378FC)
 
 Add the unified Linux 7.4 devicetree for Lenovo Xiaoxin Pad Pro GT 13

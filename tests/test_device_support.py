@@ -149,5 +149,13 @@ class TestInitramfsAndPackaging(unittest.TestCase):
         self.assertIn('--header_version", "4"', triplet)
 
 
+    def test_pipewire_camera_dropin_does_not_mask_system_libcamera_or_egl_isp(self):
+        for svc in ('pipewire', 'wireplumber'):
+            p = ROOT / f'packaging/device-support/tree/etc/systemd/user/{svc}.service.d/95-tb378fc-camera.conf'
+            txt = p.read_text(encoding='utf-8')
+            self.assertNotIn('LIBCAMERA_SOFTISP_MODE=cpu', txt)
+            self.assertNotIn('/usr/lib/tb378fc/camera', txt)
+
+
 if __name__ == '__main__':
     unittest.main()

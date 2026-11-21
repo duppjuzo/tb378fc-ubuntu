@@ -1,6 +1,6 @@
-From 6bd3f26c8760201db6d3e6c4a6d9af52be490093 Mon Sep 17 00:00:00 2001
+From bcde0492f10b10f81a7ebf3eba3dd56b96d60f19 Mon Sep 17 00:00:00 2001
 From: TB378FC Maintainer <maintainer@tb378fc.local>
-Date: Sat, 21 Nov 2026 00:48:49 +0800
+Date: Sat, 21 Nov 2026 23:50:48 +0800
 Subject: [PATCH] media: TB378FC: GC08A8, OV13B10, DW9807 VCM, CAMSS align, and
  Iris clock scaling
 
