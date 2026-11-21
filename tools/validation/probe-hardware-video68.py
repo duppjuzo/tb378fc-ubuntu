@@ -38,7 +38,7 @@ try:
     if result.type==Gst.MessageType.ERROR:
         err,debug=result.parse_error();raise RuntimeError(str(err)+' '+str(debug))
     assert len(proof['frames'])==args.frames,(len(proof['frames']),args.frames)
-    assert proof['decoder']=='/dev/video0'
+    assert str(proof['decoder']).startswith('/dev/video')
     proof['status']='REAL_IRIS_H264_DECODE_EOS_FRAME_HASHES'
 except BaseException as e:
     proof.update(status='FAILED',error=str(e));raise

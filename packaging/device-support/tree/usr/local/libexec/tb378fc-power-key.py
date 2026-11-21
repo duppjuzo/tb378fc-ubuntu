@@ -233,7 +233,7 @@ def main():
     args = parser.parse_args()
     if args.device is None:
         devices = [p for p in Path('/sys/class/input').glob('event*')
-                   if (p/'device/name').read_text().strip() == 'pmic_pwrkey']
+                   if (p/'device/name').is_file() and (p/'device/name').read_text().strip() == 'pmic_pwrkey']
         if len(devices) != 1:
             parser.error('expected one pmic_pwrkey device')
         args.device = Path('/dev/input') / devices[0].name

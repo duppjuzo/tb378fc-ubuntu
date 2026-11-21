@@ -131,8 +131,9 @@ def stage_open_firmware(root: Path, open_fw_dir: Path) -> list[str]:
         "  - qcom/sm8750/tb378fc/gen80000_zap.mbn  (Adreno 830 ZAP shader signed for Lenovo TZ)\n"
         "  - qcom/sm8750/tb378fc/adsp.mdt + adsp_dtb.mdt + adsp.b* (ADSP audio/sensors)\n"
         "  - novatek/tb378fc.bin                   (NT36536 SPI touchscreen firmware)\n"
-        "  - aw88480_acf.bin                       (AW88480 quad speaker amp profile)\n"
-        "  - ath12k/WCN7860/hw2.0/* & qca/{gng,brh}bt* (WCN7860 Wi-Fi 7 & Bluetooth firmware)\n",
+        "  - awinic/tb378fc/aw88480-native-music.acf (auto-sliced from stock aw882xx_acf.bin)\n"
+        "  - ath12k/WCN7860/hw2.0/* & qca/{gng,brh}bt* (WCN7860 Wi-Fi 7 & Bluetooth firmware)\n"
+        "  - /usr/share/qcom/sensors/{config,sns_reg.conf} (from stock /vendor/etc/sensors)\n",
         encoding="utf-8",
     )
     return staged
@@ -186,6 +187,9 @@ def verify_chroot(root: Path, kernel_release: str) -> dict:
         "/usr/lib/aarch64-linux-gnu/gstreamer-1.0/libgstlibcamera.so",
         "/usr/libexec/libcamera/v4l2-compat.so",
         "/usr/libexec/libcamera/soft_ipa_proxy",
+        "/usr/bin/hexagonrpcd",
+        "/usr/bin/sensh",
+        "/usr/sbin/tb378fc-sensord",
     )
     ldd_results = {}
     for lib in ldd_targets:
@@ -207,6 +211,11 @@ def verify_chroot(root: Path, kernel_release: str) -> dict:
     assert (root / "usr/share/libcamera/ipa/simple/ov13b10.yaml").is_file()
     assert (root / f"lib/modules/{kernel_release}/kernel/drivers/media/i2c/dw9807-vcm.ko").is_file()
     assert (root / "etc/udev/rules.d/60-persistent-v4l.rules").is_file()
+    assert (root / "lib/firmware/qcom/sm8750/Lenovo-TB378FC-tplg.bin").is_file()
+    assert (root / "usr/share/alsa/ucm2/conf.d/sm8750/Lenovo-TB378FC.conf").is_symlink()
+    assert (root / "usr/libexec/tb378fc-speaker-rotation").is_file()
+    assert (root / "usr/sbin/tb378fc-sensord").is_file()
+    assert (root / "etc/systemd/logind.conf.d/90-tb378fc-logind.conf").is_file()
 
     # 5. Ensure no machine-specific state leaked
     mid = root / "etc/machine-id"
@@ -249,8 +258,8 @@ def main() -> int:
     out_dir.mkdir(parents=True, exist_ok=True)
 
     debs = sorted(args.debs_dir.resolve().glob("tb378fc-*.deb"))
-    if len(debs) < 8:
-        raise SystemExit(f"Expected 7 tb378fc-*.deb packages in {args.debs_dir}, found {[d.name for d in debs]}")
+    if len(debs) < 9:
+        raise SystemExit(f"Expected >= 9 tb378fc-*.deb packages in {args.debs_dir}, found {[d.name for d in debs]}")
 
     # Identify kernel release from tb378fc-kernel-image deb
     kernel_debs = [d for d in debs if d.name.startswith("tb378fc-kernel-image_")]
@@ -424,8 +433,9 @@ def main() -> int:
                 "qcom/sm8750/tb378fc/gen80000_zap.mbn",
                 "qcom/sm8750/tb378fc/adsp.mdt (+ adsp_dtb.mdt, adsp.b*)",
                 "novatek/tb378fc.bin",
-                "aw88480_acf.bin",
-                "ath12k/WCN7860/hw2.0/* & qca/gngbt*",
+                "awinic/tb378fc/aw88480-native-music.acf (auto-sliced from aw882xx_acf.bin)",
+                "ath12k/WCN7860/hw2.0/* & qca/{gng,brh}bt*",
+                "/usr/share/qcom/sensors/{config,sns_reg.conf}",
             ],
         }
         (out_dir / "rootfs-manifest.json").write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")

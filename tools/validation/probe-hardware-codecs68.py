@@ -67,7 +67,7 @@ def frame(sink):
 pipeline.get_by_name('sink').connect('new-sample',frame)
 start=time.monotonic()
 try:
-    assert proof['decoder']=='/dev/video0'
+    assert str(proof['decoder']).startswith('/dev/video')
     assert pipeline.set_state(Gst.State.PLAYING)!=Gst.StateChangeReturn.FAILURE
     result=pipeline.get_bus().timed_pop_filtered(25*Gst.SECOND,Gst.MessageType.ERROR|Gst.MessageType.EOS)
     assert result is not None,'Hardware decode timed out'

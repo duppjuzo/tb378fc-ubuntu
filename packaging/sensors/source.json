@@ -1,0 +1,34 @@
+{
+  "description": "Pinned upstream sources for TB378FC Qualcomm ADSP sensor stack (magnetic cover SW_LID + SensorProxy auto-rotation)",
+  "components": [
+    {
+      "name": "hexagonrpc",
+      "url": "https://github.com/linux-msm/hexagonrpc.git",
+      "commit": "da7a3742ab8d5273a281b70ee11f16fb2cb6a690",
+      "license": "GPL-3.0-or-later"
+    },
+    {
+      "name": "qmic",
+      "url": "https://github.com/linux-msm/qmic.git",
+      "commit": "4574736afce75aa5eec1e1069a19563410167c9f",
+      "license": "BSD-3-Clause"
+    },
+    {
+      "name": "qrtr",
+      "url": "https://github.com/linux-msm/qrtr.git",
+      "commit": "29e36ae164389580a0f8ea7a7fdb728140ae978d",
+      "license": "BSD-3-Clause"
+    },
+    {
+      "name": "sensh",
+      "url": "https://gitlab.com/flamingradian/sensh.git",
+      "commit": "560b48080283fe73ca5e67635b566177028cebc9",
+      "license": "GPL-3.0-or-later"
+    },
+    {
+      "name": "tb378fc-sensord",
+      "origin": "Adapted from PickaxeHit/linux-zhiyu sensors/sensord.c",
+      "license": "GPL-2.0-or-later"
+    }
+  ]
+}

@@ -1,6 +1,6 @@
-From f0d5486a4baefdeeb07f1f090f436ae75e343b9b Mon Sep 17 00:00:00 2001
+From 3ea65d4370b50973197e20cb2c8b2cbcc334fa55 Mon Sep 17 00:00:00 2001
 From: TB378FC Maintainer <maintainer@tb378fc.local>
-Date: Sat, 21 Nov 2026 23:50:48 +0800
+Date: Sun, 22 Nov 2026 01:04:44 +0800
 Subject: [PATCH] arm64: dts: qcom: add Lenovo Xiaoxin Pad Pro GT 13 (TB378FC)
 
 Add the unified Linux 7.4 devicetree for Lenovo Xiaoxin Pad Pro GT 13
@@ -13,8 +13,8 @@ Signed-off-by: TB378FC Maintainer <maintainer@tb378fc.local>
 ---
  arch/arm64/boot/dts/qcom/Makefile             |    1 +
  .../qcom/sm8750-lenovo-tb378fc-camera.dtsi    |  228 +++
- .../boot/dts/qcom/sm8750-lenovo-tb378fc.dts   | 1557 +++++++++++++++++
- 3 files changed, 1786 insertions(+)
+ .../boot/dts/qcom/sm8750-lenovo-tb378fc.dts   | 1566 +++++++++++++++++
+ 3 files changed, 1795 insertions(+)
  create mode 100644 arch/arm64/boot/dts/qcom/sm8750-lenovo-tb378fc-camera.dtsi
  create mode 100644 arch/arm64/boot/dts/qcom/sm8750-lenovo-tb378fc.dts
 
@@ -266,10 +266,10 @@ index 00000000000..09206a0317d
 +};
 diff --git a/arch/arm64/boot/dts/qcom/sm8750-lenovo-tb378fc.dts b/arch/arm64/boot/dts/qcom/sm8750-lenovo-tb378fc.dts
 new file mode 100644
-index 00000000000..f846af2be06
+index 00000000000..57cc49a17da
 --- /dev/null
 +++ b/arch/arm64/boot/dts/qcom/sm8750-lenovo-tb378fc.dts
-@@ -0,0 +1,1557 @@
+@@ -0,0 +1,1566 @@
 +// SPDX-License-Identifier: BSD-3-Clause
 +/*
 + * Lenovo Xiaoxin Pad Pro GT 13 (TB378FC) - Qualcomm SM8750P mainline board DTS.
@@ -568,9 +568,9 @@ index 00000000000..f846af2be06
 +				"Speakers", "Amp2 OUT",
 +				"Speakers", "Amp3 OUT",
 +				"AMIC1", "MIC BIAS1",
-+				"AMIC4", "MIC BIAS3",
++				"AMIC4", "MIC BIAS4",
 +				"TX SWR_INPUT4", "ADC1_OUTPUT",
-+				"TX SWR_INPUT8", "ADC3_OUTPUT";
++				"TX SWR_INPUT6", "ADC3_OUTPUT";
 +		pinctrl-names = "default";
 +		pinctrl-0 = <&tb378fc_sec_tdm>;
 +
@@ -1818,6 +1818,15 @@ index 00000000000..f846af2be06
 +
 +&swr2 {
 +	status = "okay";
++
++	/*
++	 * TB378FC WCD9390 TX transport timings at 19.2 MHz bus clock:
++	 * ADC1..ADC4 leave WCD9390 data port 1 onto master DP3 (lane 1,
++	 * offset 0, sample interval 3 -> 4.8 MHz), feeding SWR_MIC4..SWR_MIC7.
++	 */
++	qcom,ports-sinterval-low = /bits/ 8 <0x01 0x03 0x03 0x03>;
++	qcom,ports-offset1 = /bits/ 8 <0x00 0x02 0x00 0x02>;
++	qcom,ports-lane-control = /bits/ 8 <0x01 0x00 0x01 0x00>;
 +
 +	wcd939x_tx: codec@0,3 {
 +		compatible = "sdw20217010e00";

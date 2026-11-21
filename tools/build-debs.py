@@ -4,7 +4,8 @@
 
 Produces:
   - tb378fc-device-support_<ver>_arm64.deb  (systemd units, helpers, udev rules, symlinks)
-  - tb378fc-audio_<ver>_arm64.deb           (ALSA UCM2 + AudioReach topology source)
+  - tb378fc-audio_<ver>_arm64.deb           (compiled Lenovo-TB378FC-tplg.bin, ALSA UCM2,
+                                             and PipeWire quad-speaker rotation service)
   - tb378fc-kernel-image_<krel>_arm64.deb   (optional, when --kernel-out is provided:
                                              /boot/vmlinuz, /boot/dtb, /lib/modules/<krel>)
   - tb378fc-device_<ver>_arm64.deb          (metapackage tying the board stack together)
@@ -51,7 +52,7 @@ def copy_tree_filtered(src: Path, dst: Path, exclude_prefixes=()):
 def pack_deb(stage: Path, out_deb: Path):
     out_deb.parent.mkdir(parents=True, exist_ok=True)
     subprocess.run(
-        ["dpkg-deb", "--root-owner-group", "--build", str(stage), str(out_deb)],
+        ["dpkg-deb", "--root-owner-group", "-Zxz", "--build", str(stage), str(out_deb)],
         check=True,
     )
     return out_deb
@@ -86,7 +87,6 @@ def build_device_support(version: str, out_dir: Path) -> Path:
         stage = Path(tmp) / "pkg"
         stage.mkdir()
         tree = REPO / "packaging/device-support/tree"
-        # Audio UCM2 goes into tb378fc-audio so packages stay cleanly separated
         copy_tree_filtered(tree, stage, exclude_prefixes=("usr/share/alsa",))
 
         symlinks = json.loads((REPO / "packaging/device-support/symlinks.json").read_text(encoding="utf-8"))
@@ -127,18 +127,60 @@ def build_device_support(version: str, out_dir: Path) -> Path:
         return pack_deb(stage, out_dir / f"tb378fc-device-support_{version}_arm64.deb")
 
 
+def compile_audioreach_topology(work_dir: Path, dst_tplg: Path) -> None:
+    m4_src = REPO / "packaging/audio/Lenovo-TB378FC.m4"
+    m4_inc = REPO / "packaging/audio/include"
+    conf_path = work_dir / "Lenovo-TB378FC.conf"
+    decoded_path = work_dir / "Lenovo-TB378FC.decoded.conf"
+    dst_tplg.parent.mkdir(parents=True, exist_ok=True)
+
+    with conf_path.open("w", encoding="utf-8") as conf_out:
+        subprocess.run(
+            ["m4", "-I", str(m4_inc), str(m4_src)],
+            stdout=conf_out,
+            check=True,
+        )
+    subprocess.run(["alsatplg", "-c", str(conf_path), "-o", str(dst_tplg)], check=True)
+    subprocess.run(["alsatplg", "-d", str(dst_tplg), "-o", str(decoded_path)], check=True)
+    decoded = decoded_path.read_text(encoding="utf-8", errors="replace")
+    for widget in ("Secondary TDM0 Playback", "MultiMedia3 Capture", "TX_CODEC_DMA_TX_3 Capture"):
+        if widget not in decoded:
+            raise RuntimeError(f"Compiled topology missing expected AudioReach widget: {widget}")
+
+
 def build_audio(version: str, out_dir: Path) -> Path:
     with tempfile.TemporaryDirectory() as tmp:
-        stage = Path(tmp) / "pkg"
+        tmp_path = Path(tmp)
+        stage = tmp_path / "pkg"
         stage.mkdir()
+
         ucm_src = REPO / "packaging/device-support/tree/usr/share/alsa"
-        if ucm_src.is_dir():
-            copy_tree_filtered(ucm_src, stage / "usr/share/alsa")
-        m4_src = REPO / "packaging/audio/Lenovo-TB378FC.m4"
-        if m4_src.is_file():
-            dst = stage / "usr/share/tb378fc/audio/Lenovo-TB378FC.m4"
-            dst.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(m4_src, dst)
+        copy_tree_filtered(ucm_src, stage / "usr/share/alsa")
+        ucm_conf_d = stage / "usr/share/alsa/ucm2/conf.d/sm8750"
+        ucm_conf_d.mkdir(parents=True, exist_ok=True)
+        ucm_link = ucm_conf_d / "Lenovo-TB378FC.conf"
+        if not ucm_link.is_symlink():
+            ucm_link.symlink_to("../../Qualcomm/sm8750/Lenovo-TB378FC/Lenovo-TB378FC.conf")
+
+        audio_tree = REPO / "packaging/audio/tree"
+        if audio_tree.is_dir():
+            copy_tree_filtered(audio_tree, stage)
+
+        user_wants = stage / "usr/lib/systemd/user/graphical-session.target.wants"
+        user_wants.mkdir(parents=True, exist_ok=True)
+        link = user_wants / "tb378fc-speaker-rotation.service"
+        if not link.is_symlink():
+            link.symlink_to("../tb378fc-speaker-rotation.service")
+
+        tplg_src = stage / "usr/share/tb378fc/audio"
+        tplg_src.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(REPO / "packaging/audio/Lenovo-TB378FC.m4", tplg_src / "Lenovo-TB378FC.m4")
+        shutil.copy2(REPO / "packaging/audio/source.json", tplg_src / "source.json")
+
+        compile_audioreach_topology(
+            tmp_path,
+            stage / "lib/firmware/qcom/sm8750/Lenovo-TB378FC-tplg.bin",
+        )
 
         write_control(
             stage,
@@ -149,10 +191,11 @@ def build_audio(version: str, out_dir: Path) -> Path:
                 "Section": "sound",
                 "Priority": "optional",
                 "Maintainer": MAINTAINER,
-                "Depends": "alsa-ucm-conf",
-                "Description": "Lenovo TB378FC ALSA UCM2 profiles and AudioReach topology source\n"
-                " Provides ALSA Use Case Manager configuration for quad AW88480 speakers\n"
-                " and WCD9390 SoundWire microphones on Lenovo TB378FC.",
+                "Depends": "alsa-ucm-conf, python3, python3-gi",
+                "Recommends": "pipewire-bin, wireplumber",
+                "Description": "Lenovo TB378FC AudioReach topology, ALSA UCM2, and quad-speaker rotation\n"
+                " Provides compiled Lenovo-TB378FC-tplg.bin, ALSA UCM2 profiles for quad\n"
+                " AW88480 speakers + dual WCD9390 microphones, and PipeWire speaker rotation.",
             },
         )
         return pack_deb(stage, out_dir / f"tb378fc-audio_{version}_arm64.deb")
@@ -232,8 +275,9 @@ def build_meta(version: str, deps: list[str], out_dir: Path) -> Path:
                 "Priority": "optional",
                 "Maintainer": MAINTAINER,
                 "Depends": ", ".join(deps),
+                "Recommends": "tb378fc-sensors, tb378fc-libcamera, tb378fc-mesa, tb378fc-turnip, tb378fc-qcom-va",
                 "Description": "Lenovo Xiaoxin Pad Pro GT 13 (TB378FC) mainline device metapackage\n"
-                " Installs the complete TB378FC device-support, audio, and kernel packages.",
+                " Installs the complete TB378FC device-support, audio, sensor, camera, and kernel packages.",
             },
         )
         return pack_deb(stage, out_dir / f"tb378fc-device_{version}_arm64.deb")

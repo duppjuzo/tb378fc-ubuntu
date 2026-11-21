@@ -1,6 +1,6 @@
-From 209f46d696912ad340d8a6881c0c03294082c9bc Mon Sep 17 00:00:00 2001
+From b6a5caad3ff1e03e913dbd5a5cd34a9b0329ea42 Mon Sep 17 00:00:00 2001
 From: TB378FC Maintainer <maintainer@tb378fc.local>
-Date: Sat, 21 Nov 2026 23:50:48 +0800
+Date: Sun, 22 Nov 2026 01:04:43 +0800
 Subject: [PATCH] power: supply: qcom_battmgr: add Lenovo TB378FC quirks and
  diagnostics
 

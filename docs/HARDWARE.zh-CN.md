@@ -26,3 +26,8 @@
 - **真机回归待测**：本次升级已在 WSL2 ext4 环境完成完整 ARM64 交叉编译、`CHECK_DTBS=y` / `dtb_audit` / `checkpatch` / `clangd` 校验、Ubuntu 26.04 chroot 全量 `ldd` 闭环、QEMU ARM64 双场景启动冒烟与 GitHub CI 验证，**尚未在实体 TB378FC 平板上完成真机回归**。上机前请务必先完整备份本机原厂三件套，并通过 `tools/build-boot-triplet.py` 生成 **Android Header v4** 镜像刷入测试（联想原厂 ABL 不支持 `fastboot boot` / Header v2）。
 - **固件需自行提取**：仓库不含任何闭源固件（`adsp`、`gen80000_zap`、`vpu35_4v`、`novatek/tb378fc.bin`、`aw88480_acf.bin`、WCN7860 固件等），详见 [`firmware/`](../firmware/)。
 - **未适配项**：光照传感器、原厂磁吸键盘/笔充（注意：一加/小米相关驱动严禁混入）暂不计为已支持。
+
+## 传感器、磁吸皮套与音频增强（v7.4.0-rc2）
+
+- **磁吸皮套与四向自动旋转（`tb378fc-sensors`）**：通过 `hexagonrpcd` + `sensh` + `tb378fc-sensord` 对接高通 ADSP SNS Client，提供霍尔皮套 `SW_LID` 合盖休眠/开盖唤醒，以及 `net.hadess.SensorProxy` 四向屏幕自动旋转与环境光上报。
+- **四扬声器随屏旋转与双路麦克风录音（`tb378fc-audio`）**：编译安装 `/lib/firmware/qcom/sm8750/Lenovo-TB378FC-tplg.bin`，支持四路 AW88480 功放随 Mutter 屏幕方向动态切换声道，以及双路 WCD9390 模拟麦克风（`AMIC1/ADC1` + `AMIC4/ADC3` → `SWR_MIC4/SWR_MIC6`，`+18 dB` 增益）立体声采集。

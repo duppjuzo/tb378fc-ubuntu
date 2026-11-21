@@ -1,0 +1,13 @@
+[Unit]
+Description=Rotate stereo/quad output across Lenovo TB378FC's four speakers
+After=pipewire.service wireplumber.service
+PartOf=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart=/usr/libexec/tb378fc-speaker-rotation /usr/share/tb378fc-audio/speaker-rotation/config.json
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=graphical-session.target

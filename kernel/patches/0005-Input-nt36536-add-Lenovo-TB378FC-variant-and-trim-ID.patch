@@ -1,6 +1,6 @@
-From 54189aa476b626bd74e3808977449795f8020eee Mon Sep 17 00:00:00 2001
+From 6deeb10a484768e1edc77cd1296efb1e6319b2e1 Mon Sep 17 00:00:00 2001
 From: TB378FC Maintainer <maintainer@tb378fc.local>
-Date: Sat, 21 Nov 2026 23:50:47 +0800
+Date: Sun, 22 Nov 2026 01:04:43 +0800
 Subject: [PATCH] Input: nt36536 - add Lenovo TB378FC variant and trim ID
 
 Add the TB378FC chip trim ID (0x15/0x23/0x65/0x03) and lenovo,tb378fc-nvt

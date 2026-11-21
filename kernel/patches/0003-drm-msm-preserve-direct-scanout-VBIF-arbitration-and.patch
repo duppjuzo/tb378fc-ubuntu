@@ -1,6 +1,6 @@
-From ca64a21c07f2c432b37036374d0ac707b5615d94 Mon Sep 17 00:00:00 2001
+From 3170d46e7c01c23a0eecd6afaabffec9ddfcc9c6 Mon Sep 17 00:00:00 2001
 From: TB378FC Maintainer <maintainer@tb378fc.local>
-Date: Sat, 21 Nov 2026 23:50:47 +0800
+Date: Sun, 22 Nov 2026 01:04:43 +0800
 Subject: [PATCH] drm/msm: preserve direct scanout, VBIF arbitration, and
  native seamless DFPS
 

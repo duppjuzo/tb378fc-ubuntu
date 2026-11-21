@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.2.2-v7.4-audio-sensors-audit — 2026-11-22
+
+### 双麦克风录音、四扬声器随屏旋转与磁吸皮套/传感器全栈合并
+- **双路 WCD9390 麦克风修复（补丁 `0004` + `0009` + UCM2 + AudioReach 拓扑）**：
+  - 修复 `drivers/soundwire/qcom.c` 端口分配 `pn >= maxport` 越界拒绝第 4 端口（DP4）导致 `-EBUSY` 的问题，以及 `wcd939x-sdw.c` `ch_count = 1` 通道计数多 1 的上游缺陷。
+  - 移除错误的 `tb378fc_native_tx_ch_info` 覆盖，对齐主线 WCD9390 硬件复位 Slave Port 1 映射（`ADC1=SWR_MIC4`、`ADC3=SWR_MIC6`），修正 DTS `AMIC4 -> MIC BIAS4` 偏置供电与 `&swr2` 19.2 MHz 总线 DP3/DP4 时序（`lane 1/off 0`、`sinterval 3`），并在 `Mic.conf` 配置 `+18 dB` 抽取增益（`102`）与 `75 Hz` 高通滤波。
+  - 在 `tools/build-debs.py` 构建阶段使用 `m4` + `alsatplg` 自动编译并反编译校验 `/lib/firmware/qcom/sm8750/Lenovo-TB378FC-tplg.bin`（同时包含 4 声道播放与双麦录音子图），补齐缺失的 `/usr/share/alsa/ucm2/conf.d/sm8750/Lenovo-TB378FC.conf` 发现软链。
+- **四扬声器随屏自动旋转**：在 `tb378fc-audio` 集成基于 `org.gnome.Mutter.DisplayConfig` 与 PipeWire 4 声道 `filter-chain` 的 `tb378fc-speaker-rotation` 用户态服务，横竖屏四向旋转时自动切换左右物理声道。
+- **磁吸皮套休眠唤醒 + 四向屏幕自动旋转（`tb378fc-sensors`）**：新增 `tools/build-sensors-deb.py`，交叉编译打包 `hexagonrpcd`、`libqrtr`、`sensh` 与 `tb378fc-sensord`，支持磁吸保护套霍尔开关 `SW_LID` 合盖休眠/开盖唤醒，以及 `net.hadess.SensorProxy` 四向重力感应自动旋转与环境光上报。
+
+### 历史代码全量审计与隐患清零
+- **AW88480 功放固件自动切片**：在 `tb378fc-install-firmware` 内置原厂 `aw882xx_acf.bin` → `/lib/firmware/awinic/tb378fc/aw88480-native-music.acf` 无损单 Profile（Music）提取与 CRC8/寄存器边界校验，并自动部署 `/vendor/etc/sensors` 至 `/usr/share/qcom/sensors`。
+- **清理 RAM 试验阶段残留配置**：移除阻断皮套合盖休眠的 `HandleLidSwitch=ignore`、导致重启丢日志的 `Storage=volatile`、悬空的旧传感器单元与死文件 `camera75/`，替换为正式桌面版 `90-tb378fc-{logind,journald,watchdog}.conf`、NetworkManager MAC 保持配置与 Chrony RTC 恢复配置。
+
 ## 0.2.1-v7.4-gki-v4 — 2026-11-21
 
 ### 启动流程切换为 Android Header v4 默认主线

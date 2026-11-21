@@ -1,6 +1,6 @@
-From b0c69ae37445ded7d0b109d12b4ecbb1d83dec25 Mon Sep 17 00:00:00 2001
+From 7b81bb9d6c428c1a9ea6382f29993eab0bd2f671 Mon Sep 17 00:00:00 2001
 From: TB378FC Maintainer <maintainer@tb378fc.local>
-Date: Sat, 21 Nov 2026 23:50:47 +0800
+Date: Sun, 22 Nov 2026 01:04:42 +0800
 Subject: [PATCH] drm/panel: add Lenovo TB378FC Novatek NT36526 dual-DSI DSC
  panel
 
