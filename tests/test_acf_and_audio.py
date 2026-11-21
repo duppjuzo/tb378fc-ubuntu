@@ -2,10 +2,10 @@
 """Unit tests for AW88480 ACF v1 Music-profile slicer, AudioReach topology build, and sensor configs."""
 import importlib.util
 from pathlib import Path
+import shutil
 import struct
-import subprocess
 import tempfile
-import pytest
+import unittest
 
 REPO = Path(__file__).resolve().parents[1]
 
@@ -66,42 +66,45 @@ def make_synthetic_stock_acf(fw_mod, include_voice_profile: bool = True, bad_efu
     return bytes(header + table + blobs)
 
 
-def test_firmware_installer_copies_stay_identical():
-    a = (REPO / "tools/install-tb378fc-firmware.py").read_bytes()
-    b = (REPO / "packaging/device-support/tree/usr/local/sbin/tb378fc-install-firmware").read_bytes()
-    assert a == b
+class TestAcfAndAudioTopology(unittest.TestCase):
+    def test_firmware_installer_copies_stay_identical(self):
+        a = (REPO / "tools/install-tb378fc-firmware.py").read_bytes()
+        b = (REPO / "packaging/device-support/tree/usr/local/sbin/tb378fc-install-firmware").read_bytes()
+        self.assertEqual(a, b)
+
+    def test_aw88480_acf_slicer_extracts_music_and_is_idempotent(self):
+        fw = load_fw_tool()
+        stock = make_synthetic_stock_acf(fw, include_voice_profile=True)
+        sliced = fw.slice_aw88480_music_acf(stock)
+        ddt_size, ddt_num, hdr_off = struct.unpack_from("<III", sliced, 52)
+        self.assertEqual((ddt_size, ddt_num, hdr_off), (256, 4, 80))
+        self.assertEqual(fw.slice_aw88480_music_acf(sliced), sliced)
+
+    def test_aw88480_acf_slicer_rejects_efuse_registers(self):
+        fw = load_fw_tool()
+        bad = make_synthetic_stock_acf(fw, include_voice_profile=False, bad_efuse=True)
+        with self.assertRaisesRegex(ValueError, "efuse/trim"):
+            fw.slice_aw88480_music_acf(bad)
+
+    def test_audioreach_topology_compiles_playback_and_capture(self):
+        if not (shutil.which("m4") and shutil.which("alsatplg")):
+            self.skipTest("m4/alsatplg not installed")
+        spec = importlib.util.spec_from_file_location("build_debs", REPO / "tools/build-debs.py")
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        with tempfile.TemporaryDirectory() as tmp:
+            tp = Path(tmp)
+            out_bin = tp / "Lenovo-TB378FC-tplg.bin"
+            mod.compile_audioreach_topology(tp, out_bin)
+            self.assertTrue(out_bin.is_file())
+            self.assertGreater(out_bin.stat().st_size, 2048)
+
+    def test_logind_suspends_on_lid_and_sensors_files_exist(self):
+        logind = (REPO / "packaging/device-support/tree/etc/systemd/logind.conf.d/90-tb378fc-logind.conf").read_text(encoding="utf-8")
+        self.assertIn("HandleLidSwitch=suspend", logind)
+        self.assertTrue((REPO / "packaging/sensors/tb378fc-sensord.c").is_file())
+        self.assertTrue((REPO / "tools/build-sensors-deb.py").is_file())
 
 
-def test_aw88480_acf_slicer_extracts_music_and_is_idempotent():
-    fw = load_fw_tool()
-    stock = make_synthetic_stock_acf(fw, include_voice_profile=True)
-    sliced = fw.slice_aw88480_music_acf(stock)
-    ddt_size, ddt_num, hdr_off = struct.unpack_from("<III", sliced, 52)
-    assert (ddt_size, ddt_num, hdr_off) == (256, 4, 80)
-    # Idempotence on already-sliced Music ACF
-    assert fw.slice_aw88480_music_acf(sliced) == sliced
-
-
-def test_aw88480_acf_slicer_rejects_efuse_registers():
-    fw = load_fw_tool()
-    bad = make_synthetic_stock_acf(fw, include_voice_profile=False, bad_efuse=True)
-    with pytest.raises(ValueError, match="efuse/trim"):
-        fw.slice_aw88480_music_acf(bad)
-
-
-def test_audioreach_topology_compiles_playback_and_capture():
-    if not (shutil_which("m4") and shutil_which("alsatplg")):
-        pytest.skip("m4/alsatplg not installed")
-    spec = importlib.util.spec_from_file_location("build_debs", REPO / "tools/build-debs.py")
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    with tempfile.TemporaryDirectory() as tmp:
-        tp = Path(tmp)
-        out_bin = tp / "Lenovo-TB378FC-tplg.bin"
-        mod.compile_audioreach_topology(tp, out_bin)
-        assert out_bin.is_file() and out_bin.stat().st_size > 2048
-
-
-def shutil_which(cmd: str) -> str | None:
-    import shutil
-    return shutil.which(cmd)
+if __name__ == "__main__":
+    unittest.main()
