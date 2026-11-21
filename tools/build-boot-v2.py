@@ -108,7 +108,8 @@ def main():
     if layout == "none":
         print("NOTE: DTB has no ABL overlay sink (layout=none). Before fastboot boot on a stock-DTBO tablet, "
               "wrap the DTB with your stock vendor_boot/dtbo via third_party/oneplus/tools/build-erhai-abl-symbols.py.")
-    print(f"Verify safely without flashing partitions: fastboot boot {boot_img}")
+    print("WARNING: Lenovo TB378FC stock ABL does not support fastboot boot (Header v2). "
+          "Prefer tools/build-boot-triplet.py (Header v4) for physical TB378FC testing.")
 
 
 if __name__ == "__main__":

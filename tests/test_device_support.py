@@ -137,5 +137,17 @@ class TestInitramfsAndPackaging(unittest.TestCase):
         self.assertIn('novatek_ts_fw.bin', fw)
 
 
+    def test_default_boot_docs_use_gki_v4_not_fastboot_boot_v2(self):
+        readme = (ROOT / 'README.md').read_text(encoding='utf-8')
+        flashing = (ROOT / 'docs/FLASHING.zh-CN.md').read_text(encoding='utf-8')
+        triplet = (ROOT / 'tools/build-boot-triplet.py').read_text(encoding='utf-8')
+        self.assertIn('build-boot-triplet.py', readme)
+        self.assertIn('build-boot-triplet.py', flashing)
+        self.assertNotIn('fastboot boot boot-v2.img', readme)
+        self.assertNotIn('fastboot boot boot-v2.img', flashing)
+        self.assertIn('--with-vbmeta', triplet)
+        self.assertIn('--header_version", "4"', triplet)
+
+
 if __name__ == '__main__':
     unittest.main()

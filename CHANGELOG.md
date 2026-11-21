@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.2.1-v7.4-gki-v4 — 2026-11-21
+
+### 启动流程切换为 Android Header v4 默认主线
+- 因联想 TB378FC 原厂 ABL 不支持 `fastboot boot`（Header v2 镜像无效），将 `tools/build-boot-triplet.py` 升级为默认主启动镜像工具，支持 `--stock` 原厂匹配签名（保留原厂 `vbmeta`）、独立固定分区尺寸 AVB 签名、`--with-vbmeta`（`--flags 3`）及 `--unsigned` 离线校验模式，并自动检查 DTB 是否已注入 ABL overlay sink。
+- 将 `tools/build-boot-v2.py` 标记为遗留可选工具，全面更新 `README.md`、`docs/FLASHING.zh-CN.md`、`docs/BUILD.zh-CN.md`、`docs/HARDWARE.zh-CN.md`。
+
+### 内核、相机、蓝牙与 Ubuntu 26.04 RootFS 增强
+- 扩展至 10 个模块化补丁（`0001..0010`）：新增原生 90 Hz DFPS 模式（60/90/120/144 Hz 同 ~183 MHz 链路时钟）、`q6apm-dai` 2ch/4ch 播放声道映射、后摄 DW9807（GT9772B）VCM 自动对焦与 DT Schema、Iris VPU35 AV1(3×)/10-bit(2×) 时钟缩放、SM8750 TSENS `no_irq_wake`、UCSI `system_freezable_wq` 与 WCN7860 `gngbt*` → `brhbt*` 自动固件回退。
+- 新增 `tools/build-libcamera-deb.py`（补丁版 `libcamera 0.7.2`，支持 Adreno EGL debayer 与 CDAF 自动对焦）、`60-persistent-v4l.rules`、`dma_heap` `uaccess` 规则与 `tb378fc-install-firmware` 对 `brhbt*`/`novatek_ts_fw.bin` 的支持。
+
 ## 0.2.0-v7.4-modernize — 2026-11-20
 
 ### 阶段 P0：工程清理、去硬编码与安全加固
