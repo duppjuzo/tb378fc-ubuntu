@@ -1,0 +1,18 @@
+[Unit]
+Description=Lenovo TB378FC Native Power-Profiles, uclamp Scheduler & Thermal/6W Power Controller
+After=dbus.service local-fs.target tb378fc-hw-init.service
+Before=gdm.service display-manager.service
+Conflicts=power-profiles-daemon.service
+
+[Service]
+Type=simple
+ExecStart=/usr/local/libexec/tb378fc-thermal-guard.py
+Nice=-5
+CPUQuota=10%
+MemoryMax=64M
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target
+Alias=power-profiles-daemon.service

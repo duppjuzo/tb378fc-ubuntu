@@ -1,0 +1,7 @@
+#!/bin/sh
+# SPDX-License-Identifier: GPL-2.0-only
+# Work around mesa-2404 Snap (Mesa 25.0.7) lacking Adreno 830 (chip id 0xe844050001) support.
+export LIBGL_ALWAYS_SOFTWARE=1
+export GALLIUM_DRIVER=llvmpipe
+export GSK_RENDERER=cairo
+exec /snap/bin/desktop-security-center "$@"

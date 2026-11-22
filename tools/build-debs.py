@@ -101,9 +101,24 @@ def build_device_support(version: str, out_dir: Path) -> Path:
         postinst = (
             "#!/bin/sh\n"
             "set -eu\n"
-            'if [ "$1" = "configure" ] && [ -d /run/systemd/system ]; then\n'
-            "    systemctl daemon-reload || true\n"
-            "    udevadm control --reload-rules || true\n"
+            'if [ "$1" = "configure" ]; then\n'
+            "    rm -f /etc/udev/rules.d/82-tb378fc-dmaheap75.rules || true\n"
+            "    if command -v usermod >/dev/null 2>&1; then\n"
+            "        awk -F: '$3 >= 1000 && $3 < 60000 && $7 !~ /(nologin|false)$/ { print $1 }' /etc/passwd | while IFS= read -r u; do\n"
+            '            [ -n "$u" ] && usermod -aG video,render "$u" 2>/dev/null || true\n'
+            "        done\n"
+            "    fi\n"
+            "    if [ -d /run/systemd/system ]; then\n"
+            "        systemctl daemon-reload || true\n"
+            "        udevadm control --reload-rules || true\n"
+            "        udevadm trigger --subsystem-match=dma_heap --subsystem-match=media --subsystem-match=video4linux --subsystem-match=block || true\n"
+            "        sysctl -p /etc/sysctl.d/90-tb378fc-vm.conf >/dev/null 2>&1 || true\n"
+            "        modprobe v4l2loopback 2>/dev/null || true\n"
+            "        systemctl enable fstrim.timer >/dev/null 2>&1 || true\n"
+            "        systemctl try-restart systemd-journald.service systemd-oomd.service >/dev/null 2>&1 || true\n"
+            "        systemctl restart tb378fc-thermal-guard.service || true\n"
+            "        update-desktop-database /usr/local/share/applications >/dev/null 2>&1 || true\n"
+            "    fi\n"
             "fi\n"
             "exit 0\n"
         )
@@ -143,7 +158,7 @@ def compile_audioreach_topology(work_dir: Path, dst_tplg: Path) -> None:
     subprocess.run(["alsatplg", "-c", str(conf_path), "-o", str(dst_tplg)], check=True)
     subprocess.run(["alsatplg", "-d", str(dst_tplg), "-o", str(decoded_path)], check=True)
     decoded = decoded_path.read_text(encoding="utf-8", errors="replace")
-    for widget in ("Secondary TDM0 Playback", "MultiMedia3 Capture", "TX_CODEC_DMA_TX_3 Capture"):
+    for widget in ("Secondary TDM0 Playback", "DISPLAY_PORT_RX_0 Playback", "MultiMedia2 Playback", "MultiMedia3 Capture", "TX_CODEC_DMA_TX_3 Capture"):
         if widget not in decoded:
             raise RuntimeError(f"Compiled topology missing expected AudioReach widget: {widget}")
 
@@ -229,6 +244,14 @@ def build_kernel_deb(kernel_out: Path, version: str, out_dir: Path) -> tuple[Pat
             dst_ko = kernel_mod_dir / rel_ko
             dst_ko.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(src_ko, dst_ko)
+
+        for rel_extra in sorted(result.get("extra_modules", {})):
+            src_extra = kernel_out / "extra-modules" / Path(rel_extra).name
+            if not src_extra.is_file():
+                raise FileNotFoundError(f"Missing extra kernel module: {src_extra}")
+            dst_extra = mod_root / rel_extra
+            dst_extra.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(src_extra, dst_extra)
 
         for meta in ("modules.order", "modules.builtin", "modules.builtin.modinfo"):
             src_m = kernel_out / meta

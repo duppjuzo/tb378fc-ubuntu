@@ -1,20 +1,29 @@
 #!/bin/sh
 # SPDX-License-Identifier: GPL-2.0-only
-# Bounded RAM-only compressed swap (2 GiB logical / 1 GiB mem_limit).
+# 1:1 RAM-sized zstd compressed swap on /dev/zram0.
 set -eu
+
 [ -e /sys/block/zram0/disksize ] || modprobe zram num_devices=1 2>/dev/null || exit 0
 [ -e /sys/block/zram0/disksize ] || exit 0
 [ "$(cat /sys/block/zram0/disksize)" = "0" ] || exit 0
+
+mem_kb=$(awk '/^MemTotal:/ { print $2; exit }' /proc/meminfo)
+if [ -z "${mem_kb:-}" ] || [ "$mem_kb" -le 0 ]; then
+    exit 0
+fi
+disk_bytes=$(( (mem_kb / 4) * 4096 ))
+
 if grep -qw zstd /sys/block/zram0/comp_algorithm 2>/dev/null; then
     echo zstd > /sys/block/zram0/comp_algorithm
 else
     echo lz4 > /sys/block/zram0/comp_algorithm
 fi
-echo 1073741824 > /sys/block/zram0/mem_limit
-echo 2147483648 > /sys/block/zram0/disksize
-mkswap /dev/zram0
+
+echo 0 > /sys/block/zram0/mem_limit 2>/dev/null || true
+echo "$disk_bytes" > /sys/block/zram0/disksize
+mkswap /dev/zram0 >/dev/null
 swapon -p 100 /dev/zram0
-echo 100 > /proc/sys/vm/swappiness
+echo 130 > /proc/sys/vm/swappiness
 echo 0 > /proc/sys/vm/page-cluster
 echo madvise > /sys/kernel/mm/transparent_hugepage/enabled
 cat /proc/swaps

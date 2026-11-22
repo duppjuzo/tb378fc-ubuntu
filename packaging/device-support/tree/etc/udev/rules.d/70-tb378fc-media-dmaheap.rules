@@ -1,0 +1,7 @@
+# SPDX-License-Identifier: GPL-2.0-only
+# Must run before 73-seat-late.rules so systemd's uaccess builtin grants ACLs
+# to the active desktop user for Qualcomm Iris VA-API (/dev/dma_heap/*) and
+# libcamera/PipeWire (/dev/media*, /dev/video*, /dev/v4l-subdev*).
+SUBSYSTEM=="dma_heap", GROUP="video", MODE="0660", TAG+="uaccess"
+SUBSYSTEM=="media", GROUP="video", MODE="0660", TAG+="uaccess"
+SUBSYSTEM=="video4linux", GROUP="video", MODE="0660", TAG+="uaccess"

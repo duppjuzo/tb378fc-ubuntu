@@ -1,0 +1,111 @@
+#!/bin/sh
+# SPDX-License-Identifier: GPL-2.0-only
+# Lenovo Xiaoxin Pad Pro GT 13 (TB378FC) post-rootfs hardware bringup
+set -eu
+
+# 0. Ensure regular local desktop accounts are in video and render groups so
+#    WirePlumber/libcamera, Iris VA-API (/dev/dma_heap/system), and torch work
+#    immediately on cold boot even before seat ACL transitions settle.
+if command -v usermod >/dev/null 2>&1; then
+    awk -F: '$3 >= 1000 && $3 < 60000 && $7 !~ /(nologin|false)$/ { print $1 }' /etc/passwd | while IFS= read -r u; do
+        [ -n "$u" ] || continue
+        if ! id -nG "$u" 2>/dev/null | tr ' ' '\n' | grep -qx video || \
+           ! id -nG "$u" 2>/dev/null | tr ' ' '\n' | grep -qx render; then
+            usermod -aG video,render "$u" 2>/dev/null || true
+        fi
+    done
+fi
+
+# 1. Start ADSP / CDSP remoteprocs that deferred before rootfs /lib/firmware mounted
+for r in /sys/class/remoteproc/remoteproc*; do
+    [ -e "$r/state" ] || continue
+    if [ "$(cat "$r/state" 2>/dev/null || true)" = "offline" ]; then
+        echo start > "$r/state" 2>/dev/null || true
+    fi
+done
+
+# 2. Ensure Novatek NT36536 SPI touchscreen bound with /lib/firmware/novatek/tb378fc.bin
+if [ -e /sys/bus/spi/devices/spi0.0 ] && [ ! -d /sys/bus/spi/devices/spi0.0/input ]; then
+    echo spi0.0 > /sys/bus/spi/drivers/nt36536/unbind 2>/dev/null || true
+    sleep 0.2
+    echo spi0.0 > /sys/bus/spi/drivers/nt36536/bind 2>/dev/null || true
+fi
+
+# 3. Ensure WCN7860 Wi-Fi 7 PCIe endpoint bound with /lib/firmware/ath12k/WCN7860/hw2.0/
+if [ -e /sys/bus/pci/devices/0000:01:00.0 ] && [ ! -e /sys/bus/pci/devices/0000:01:00.0/driver ]; then
+    echo 1 > /sys/bus/pci/devices/0000:01:00.0/remove 2>/dev/null || true
+    sleep 0.3
+    echo 1 > /sys/bus/pci/rescan 2>/dev/null || true
+elif [ ! -e /sys/bus/pci/devices/0000:01:00.0 ]; then
+    echo 1 > /sys/bus/pci/rescan 2>/dev/null || true
+fi
+
+# 4. Export non-sensitive SMEM/DT hardware metadata for unprivileged desktop tools (e.g. Resources)
+mkdir -p /run/tb378fc
+chmod 0755 /run/tb378fc
+if command -v python3 >/dev/null 2>&1; then
+    python3 - << 'PY' || true
+import glob, json, os, pathlib, struct
+
+model = "Lenovo Xiaoxin Pad Pro GT 13 (TB378FC)"
+mpath = pathlib.Path("/proc/device-tree/model")
+if mpath.exists():
+    raw = mpath.read_bytes().split(b"\x00")[0].decode("utf-8", errors="ignore").strip()
+    if raw:
+        model = raw
+
+dram_max_hz = 0
+smem_ddr = pathlib.Path("/sys/kernel/debug/qcom_smem/dram_frequencies")
+if smem_ddr.exists():
+    vals = [int(x) for x in smem_ddr.read_text().split() if x.isdigit()]
+    if vals:
+        dram_max_hz = max(vals)
+
+if dram_max_hz >= 4_700_000_000:
+    dram_speed_mts = 9600
+elif dram_max_hz >= 4_200_000_000:
+    dram_speed_mts = 8533
+elif dram_max_hz >= 3_650_000_000:
+    dram_speed_mts = 7500
+elif dram_max_hz > 0:
+    dram_speed_mts = int(round((dram_max_hz * 2) / 1_000_000))
+else:
+    dram_speed_mts = 0
+
+dt_bytes = 0
+for reg_path in glob.glob("/proc/device-tree/memory*/reg"):
+    data = pathlib.Path(reg_path).read_bytes()
+    for off in range(0, len(data) - 15, 16):
+        _, sz = struct.unpack(">QQ", data[off:off + 16])
+        dt_bytes += sz
+
+gib = dt_bytes / (1024 ** 3)
+pkg_gib = 12
+for tier in (8, 12, 16, 24, 32):
+    if gib <= tier + 0.25:
+        pkg_gib = tier
+        break
+
+info = {
+    "manufacturer": "LENOVO",
+    "model": model,
+    "dram_type": "LPDDR5X",
+    "dram_type_detail": "Synchronous Unbuffered (PoP)",
+    "dram_form_factor": "Row of chips",
+    "dram_max_hz": dram_max_hz,
+    "dram_speed_mts": dram_speed_mts,
+    "dram_size_bytes": pkg_gib * (1024 ** 3),
+    "dram_slots_total": 1,
+    "dram_slots_used": 1,
+}
+out = pathlib.Path("/run/tb378fc/hardware-info.json")
+out.write_text(json.dumps(info, indent=2) + "\n", encoding="utf-8")
+os.chmod(out, 0o644)
+PY
+fi
+
+if [ -x /usr/local/libexec/tb378fc-generate-icc ] && [ ! -s /usr/share/color/icc/colord/Lenovo-TB378FC-Display-P3.icc ]; then
+    /usr/local/libexec/tb378fc-generate-icc /usr/share/color/icc/colord >/dev/null 2>&1 || true
+fi
+
+exit 0

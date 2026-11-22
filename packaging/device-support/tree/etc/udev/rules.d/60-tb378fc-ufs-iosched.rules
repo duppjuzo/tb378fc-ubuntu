@@ -1,0 +1,3 @@
+# SPDX-License-Identifier: GPL-2.0-only
+# Optimize Qualcomm SM8750 UFS 4.0 (8-queue MCQ) latency and reduce read amplification.
+ACTION=="add|change", SUBSYSTEM=="block", KERNEL=="sd[a-z]", KERNELS=="1d84000.ufs", ATTR{queue/scheduler}="kyber", ATTR{queue/read_ahead_kb}="256"

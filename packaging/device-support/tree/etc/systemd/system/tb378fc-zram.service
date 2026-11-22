@@ -1,10 +1,15 @@
 [Unit]
-Description=Bounded RAM-only compressed swap for the disposable desktop
-After=local-fs.target
-Before=display-manager.service
+Description=1:1 RAM-sized zstd compressed zram swap
+DefaultDependencies=no
+# Must NOT order After=local-fs.target: tmp.mount has After=swap.target + Before=local-fs.target.
+After=local-fs-pre.target
+Before=swap.target systemd-oomd.service display-manager.service shutdown.target
+Conflicts=shutdown.target
+
 [Service]
 Type=oneshot
 ExecStart=/bin/sh /usr/local/libexec/tb378fc-zram
 RemainAfterExit=yes
+
 [Install]
-WantedBy=multi-user.target
+WantedBy=swap.target multi-user.target

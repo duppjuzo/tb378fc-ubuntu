@@ -1,0 +1,16 @@
+[Unit]
+Description=Lenovo TB378FC On-Demand PipeWire to V4L2 Virtual Webcam Bridge (QQ/WeChat)
+ConditionUser=!@system
+ConditionUser=!gdm
+ConditionUser=!gdm-greeter
+After=pipewire.service wireplumber.service
+Wants=pipewire.service wireplumber.service
+
+[Service]
+Type=simple
+ExecStart=/usr/local/libexec/tb378fc-v4l2-camera-bridge.py
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=graphical-session.target

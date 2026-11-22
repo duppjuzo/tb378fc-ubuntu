@@ -128,7 +128,7 @@ class TestInitramfsAndPackaging(unittest.TestCase):
     def test_camera_vcm_udev_and_kconfig(self):
         kcfg = (ROOT / 'kernel/configs/tb378fc.config').read_text(encoding='utf-8')
         self.assertIn('CONFIG_VIDEO_DW9807_VCM=m', kcfg)
-        dma = (ROOT / 'packaging/device-support/tree/etc/udev/rules.d/82-tb378fc-dmaheap75.rules').read_text(encoding='utf-8')
+        dma = (ROOT / 'packaging/device-support/tree/etc/udev/rules.d/70-tb378fc-media-dmaheap.rules').read_text(encoding='utf-8')
         self.assertIn('TAG+="uaccess"', dma)
         v4l = (ROOT / 'packaging/device-support/tree/etc/udev/rules.d/60-persistent-v4l.rules').read_text(encoding='utf-8')
         self.assertIn('KERNEL!="v4l-subdev*"', v4l)
@@ -155,6 +155,177 @@ class TestInitramfsAndPackaging(unittest.TestCase):
             txt = p.read_text(encoding='utf-8')
             self.assertNotIn('LIBCAMERA_SOFTISP_MODE=cpu', txt)
             self.assertNotIn('/usr/lib/tb378fc/camera', txt)
+
+
+
+
+class TestThermalGuardAndPowerProfiles(unittest.TestCase):
+    def setUp(self):
+        self.tg = load_script('tb378fc_thermal_guard', 'tb378fc-thermal-guard.py')
+
+    def test_profile_state_persistence_and_holds(self):
+        with tempfile.TemporaryDirectory() as td:
+            sf = Path(td) / 'power-profile'
+            st = self.tg.ProfileState(state_file=sf)
+            self.assertEqual(st.active_profile, 'balanced')
+            st.set_active_profile('performance')
+            self.assertEqual(st.active_profile, 'performance')
+            self.assertEqual(sf.read_text(encoding='utf-8').strip(), 'performance')
+
+            st2 = self.tg.ProfileState(state_file=sf)
+            self.assertEqual(st2.active_profile, 'performance')
+            st2.set_active_profile('balanced')
+            c1 = st2.hold_profile('power-saver', 'battery', 'app1', ':1.10')
+            self.assertEqual(st2.active_profile, 'power-saver')
+            c2 = st2.hold_profile('performance', 'game', 'app2', ':1.20')
+            self.assertEqual(st2.active_profile, 'performance')
+            self.assertEqual(st2.release_sender(':1.20'), [c2])
+            self.assertEqual(st2.active_profile, 'power-saver')
+            self.assertTrue(st2.release_profile(c1))
+            self.assertEqual(st2.active_profile, 'balanced')
+
+    def test_profile_thermal_walls_and_uncapped_performance(self):
+        perf = self.tg.PROFILE_CONFIG['performance']
+        bal = self.tg.PROFILE_CONFIG['balanced']
+        ps = self.tg.PROFILE_CONFIG['power-saver']
+        self.assertEqual(perf['passive_trip_mc'], 118_000)
+        self.assertEqual(bal['passive_trip_mc'], 85_000)
+        self.assertEqual(ps['passive_trip_mc'], 75_000)
+        self.assertGreater(perf['caps'][0], bal['caps'][0])
+        self.assertGreater(bal['caps'][0], ps['caps'][0])
+        self.assertEqual(len(perf['thermal_stages']), 1)
+
+    def test_6w_closed_loop_power_cap_controller(self):
+        ctrl = self.tg.PowerCapController()
+        self.assertEqual(ctrl.update('Charging', None), self.tg.POWER_CAP_AC_FALLBACK_LEVEL)
+        ctrl.reset()
+        # Sustained >6W discharging steps down smoothly
+        self.assertEqual(ctrl.update('Discharging', 6.8), 1)
+        self.assertEqual(ctrl.update('Discharging', 7.2), 2)
+        self.assertEqual(ctrl.update('Discharging', 8.5), 4)
+        # First low tick brings EMA from 7.75W -> 5.375W (still >5.2W); then 3 consecutive <5.2W ticks recover 1 step
+        self.assertEqual(ctrl.update('Discharging', 3.0), 4)
+        self.assertEqual(ctrl.update('Discharging', 3.0), 4)
+        self.assertEqual(ctrl.update('Discharging', 3.0), 4)
+        self.assertEqual(ctrl.update('Discharging', 3.0), 3)
+
+    def test_read_battery_discharge_watts_and_uclamp_helper(self):
+        with tempfile.TemporaryDirectory() as td:
+            psy = Path(td) / 'bat'
+            psy.mkdir()
+            (psy / 'status').write_text('Discharging\n')
+            (psy / 'voltage_now').write_text('4000000\n')
+            (psy / 'current_now').write_text('-1500000\n')
+            st, w = self.tg.read_battery_discharge_watts(psy)
+            self.assertEqual(st, 'Discharging')
+            self.assertAlmostEqual(w, 6.0, places=3)
+
+            (psy / 'status').write_text('Charging\n')
+            st2, w2 = self.tg.read_battery_discharge_watts(psy)
+            self.assertEqual(st2, 'Charging')
+            self.assertIsNone(w2)
+
+            cg = Path(td) / 'cg/user.slice/user-1042.slice/user@1042.service'
+            for s in ('session.slice', 'app.slice', 'background.slice'):
+                (cg / s).mkdir(parents=True)
+            n = self.tg.apply_user_slice_uclamp(self.tg.PROFILE_CONFIG['balanced']['uclamp'], Path(td) / 'cg')
+            self.assertEqual(n, 3)
+            self.assertEqual((cg / 'session.slice/cpu.uclamp.min').read_text().strip(), '12.00')
+            self.assertEqual((cg / 'background.slice/cpu.uclamp.max').read_text().strip(), '30.00')
+
+
+class TestV4l2CameraBridgeAndAv1(unittest.TestCase):
+    def test_bridge_script_constants_and_blank_frame(self):
+        br = load_script('tb378fc_v4l2_camera_bridge', 'tb378fc-v4l2-camera-bridge.py')
+        self.assertEqual(br.V4L2_EVENT_PRI_CLIENT_USAGE, 0x10E00001)
+        frame = br.make_blank_yuyv(16, 8)
+        self.assertEqual(len(frame), 16 * 8 * 2)
+
+    def test_v4l2loopback_modprobe_wireplumber_and_av1_unlocked(self):
+        mp = (ROOT / 'packaging/device-support/tree/etc/modprobe.d/tb378fc-v4l2loopback.conf').read_text(encoding='utf-8')
+        self.assertIn('exclusive_caps=1,1', mp)
+        self.assertIn('video_nr=30,31', mp)
+        wp = (ROOT / 'packaging/device-support/tree/usr/share/wireplumber/wireplumber.conf.d/52-tb378fc-hide-v4l2loopback.conf').read_text(encoding='utf-8')
+        self.assertIn('v4l2 loopback', wp)
+        bg = (ROOT / 'packaging/device-support/tree/usr/lib/systemd/user/background.slice.d/50-tb378fc-sched.conf').read_text(encoding='utf-8')
+        self.assertIn('AllowedCPUs=0-5', bg)
+        ff = (ROOT / 'packaging/video-defaults/tree/usr/lib/firefox/browser/defaults/preferences/tb378fc-video.js').read_text(encoding='utf-8')
+        self.assertIn('pref("media.av1.enabled", true);', ff)
+        self.assertIn('pref("gfx.webrender.compositor", false);', ff)
+        self.assertIn('pref("gfx.webrender.compositor.force-enabled", false);', ff)
+        lock = json.loads((ROOT / 'packaging/iris-vaapi/source.json').read_text(encoding='utf-8'))
+        self.assertIn('0006-promote-showable-av1-frames.patch', lock['patches'])
+        self.assertNotIn('0005-retain-av1-capability-boundary.patch', lock['patches'])
+
+
+
+class TestUfsMemoryOomdAndSecurityCenter(unittest.TestCase):
+    def test_camera_bridge_skips_system_users_like_gdm(self):
+        svc = (ROOT / 'packaging/device-support/tree/usr/lib/systemd/user/tb378fc-v4l2-camera-bridge.service').read_text(encoding='utf-8')
+        self.assertIn('ConditionUser=!@system', svc)
+        self.assertIn('ConditionUser=!gdm', svc)
+        self.assertIn('ConditionUser=!gdm-greeter', svc)
+        py = (ROOT / 'packaging/device-support/tree/usr/local/libexec/tb378fc-v4l2-camera-bridge.py').read_text(encoding='utf-8')
+        self.assertIn('uid < 1000 or uid >= 60000', py)
+
+    def test_ufs_iosched_and_journald_write_amplification(self):
+        rule = (ROOT / 'packaging/device-support/tree/etc/udev/rules.d/60-tb378fc-ufs-iosched.rules').read_text(encoding='utf-8')
+        self.assertIn('KERNELS=="1d84000.ufs"', rule)
+        self.assertIn('ATTR{queue/scheduler}="kyber"', rule)
+        self.assertIn('ATTR{queue/read_ahead_kb}="256"', rule)
+        jd = (ROOT / 'packaging/device-support/tree/etc/systemd/journald.conf.d/90-tb378fc-journald.conf').read_text(encoding='utf-8')
+        self.assertIn('SystemMaxUse=128M', jd)
+        self.assertIn('MaxFileSec=7day', jd)
+
+    def test_zram_ordering_vm_sysctl_and_oomd_slices(self):
+        zsvc = (ROOT / 'packaging/device-support/tree/etc/systemd/system/tb378fc-zram.service').read_text(encoding='utf-8')
+        self.assertIn('DefaultDependencies=no', zsvc)
+        self.assertIn('After=local-fs-pre.target', zsvc)
+        self.assertNotIn('After=local-fs.target', [l.strip() for l in zsvc.splitlines() if not l.strip().startswith('#')])
+        self.assertIn('Before=swap.target systemd-oomd.service', zsvc)
+        sym = json.loads((ROOT / 'packaging/device-support/symlinks.json').read_text(encoding='utf-8'))
+        self.assertIn('etc/systemd/system/swap.target.wants/tb378fc-zram.service', sym)
+        vm = (ROOT / 'packaging/device-support/tree/etc/sysctl.d/90-tb378fc-vm.conf').read_text(encoding='utf-8')
+        self.assertIn('vm.watermark_scale_factor = 125', vm)
+        self.assertIn('vm.vfs_cache_pressure = 60', vm)
+        self.assertIn('vm.swappiness = 130', vm)
+        oomd = (ROOT / 'packaging/device-support/tree/etc/systemd/oomd.conf.d/50-tb378fc-oomd.conf').read_text(encoding='utf-8')
+        self.assertIn('SwapUsedLimit=90%', oomd)
+        app_s = (ROOT / 'packaging/device-support/tree/usr/lib/systemd/user/app.slice.d/50-tb378fc-oomd.conf').read_text(encoding='utf-8')
+        self.assertIn('ManagedOOMSwap=kill', app_s)
+        self.assertIn('ManagedOOMMemoryPressure=kill', app_s)
+        bg_s = (ROOT / 'packaging/device-support/tree/usr/lib/systemd/user/background.slice.d/50-tb378fc-sched.conf').read_text(encoding='utf-8')
+        self.assertIn('ManagedOOMMemoryPressureLimit=40%', bg_s)
+        sess_s = (ROOT / 'packaging/device-support/tree/usr/lib/systemd/user/session.slice.d/50-tb378fc-sched.conf').read_text(encoding='utf-8')
+        self.assertIn('ManagedOOMPreference=omit', sess_s)
+
+    def test_security_center_and_snap_store_mesa2404_wrappers(self):
+        for app in ('desktop-security-center', 'snap-store'):
+            wrapper = (ROOT / f'packaging/device-support/tree/usr/local/bin/tb378fc-{app}').read_text(encoding='utf-8')
+            self.assertIn('LIBGL_ALWAYS_SOFTWARE=1', wrapper)
+            self.assertIn('GALLIUM_DRIVER=llvmpipe', wrapper)
+            self.assertIn(f'exec /snap/bin/{app}', wrapper)
+            desk = (ROOT / f'packaging/device-support/tree/usr/local/share/applications/{app}_{app}.desktop').read_text(encoding='utf-8')
+            self.assertIn(f'Exec=/usr/local/bin/tb378fc-{app} %U', desk)
+
+
+    def test_mglru_and_ufs_hwmon_kconfig_and_v4l2loopback_packaging(self):
+        kcfg = (ROOT / 'kernel/configs/tb378fc.config').read_text(encoding='utf-8')
+        self.assertIn('CONFIG_LRU_GEN=y', kcfg)
+        self.assertIn('CONFIG_LRU_GEN_ENABLED=y', kcfg)
+        self.assertIn('# CONFIG_LRU_GEN_STATS is not set', kcfg)
+        self.assertIn('CONFIG_SCSI_UFS_HWMON=y', kcfg)
+        bk = (ROOT / 'tools/build-kernel.sh').read_text(encoding='utf-8')
+        self.assertIn('v4l2loopback.ko', bk)
+        bd = (ROOT / 'tools/build-debs.py').read_text(encoding='utf-8')
+        self.assertIn('extra_modules', bd)
+
+
+    def test_no_qbootctl_slot_switch_bug(self):
+        self.assertFalse((ROOT / 'packaging/device-support/tree/usr/local/sbin/tb378fc-slot-switch').exists())
+        desk = (ROOT / 'packaging/device-support/tree/usr/share/applications/tb378fc-switch-to-android.desktop').read_text(encoding='utf-8')
+        self.assertNotIn('qbootctl', desk)
+        self.assertNotIn('tb378fc-slot-switch', desk)
 
 
 if __name__ == '__main__':

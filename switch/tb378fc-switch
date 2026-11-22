@@ -166,9 +166,15 @@ resolve_part() {
 mount_store() {
 	[ -n "$STORE" ] && return 0
 	if ! is_android; then
-		[ -r /run/tb378fc-root/.tb378fc-root ] || die 'persistent root is not mounted'
-		[ "$(cat /run/tb378fc-root/.tb378fc-root)" = tb378fc-root79 ] || die 'unexpected root container'
-		STORE=$STORE_DEFAULT
+		if [ -r /run/tb378fc-root/.tb378fc-root ]; then
+			[ "$(cat /run/tb378fc-root/.tb378fc-root)" = tb378fc-root79 ] || die 'unexpected root container'
+			STORE=$STORE_DEFAULT
+		elif [ -r /.tb378fc-root ]; then
+			[ "$(cat /.tb378fc-root)" = tb378fc-root79 ] || die 'unexpected root container'
+			STORE=/switch
+		else
+			die 'persistent root is not mounted'
+		fi
 		[ -d "$STORE" ] || die 'preseeded switch archive is missing'
 		return 0
 	fi

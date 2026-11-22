@@ -1,0 +1,5 @@
+// Preserve TB378FC customized conffiles (such as /etc/bluetooth/main.conf) during unattended/GUI upgrades.
+DPkg::Options {
+   "--force-confdef";
+   "--force-confold";
+};

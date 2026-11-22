@@ -1,0 +1,9 @@
+# Prevent Ubuntu archive updates from overwriting TB378FC board firmware or patched Resources app.
+Package: linux-firmware-qualcomm-misc linux-firmware-qualcomm-graphics linux-firmware-qualcomm-wireless resources
+Pin: release o=Ubuntu*
+Pin-Priority: -1
+
+# Keep TB378FC patched Mutter (scaled DP mirror + tablet auto-rotate) and GNOME Settings preferred over archive updates.
+Package: libmutter-18-0 mutter-common mutter-common-bin gir1.2-mutter-18 gnome-control-center gnome-control-center-data gnome-control-center-faces
+Pin: release o=Ubuntu*
+Pin-Priority: 100
