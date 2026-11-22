@@ -1,0 +1,12 @@
+[Unit]
+Description=Lenovo TB378FC Wide-Gamut Display Color Profile Setup
+PartOf=graphical-session.target
+After=graphical-session.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/libexec/tb378fc-color-init
+RemainAfterExit=yes
+
+[Install]
+WantedBy=graphical-session.target

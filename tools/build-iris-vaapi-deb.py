@@ -167,7 +167,7 @@ def main() -> int:
         f"Depends: libc6 (>= 2.38), libstdc++6 (>= 13.1), libgcc-s1, libva2 (>= 2.23), libdrm2 (>= 2.4.52), libegl1, libgles2, libgbm1\n"
         f"Conflicts: libva-v4l2, libva-v4l2-iris, erhai-iris-vaapi\n"
         f"Description: Qualcomm Iris VA-API video driver for Lenovo TB378FC\n"
-        f" Stateful V4L2 H.264/HEVC/VP9 decode/encode and RGB-to-NV12 VPP via Iris VPU35.\n",
+        f" Stateful V4L2 H.264/HEVC/VP9/AV1 decode, H.264/HEVC encode and RGB-to-NV12 VPP via Iris VPU35.\n",
         encoding="utf-8",
     )
 

@@ -1,0 +1,6 @@
+polkit.addRule(function(action, subject) {
+    if (action.id.indexOf("org.freedesktop.color-manager.") === 0 &&
+        (subject.local || subject.isInGroup("sudo") || subject.isInGroup("video"))) {
+        return polkit.Result.YES;
+    }
+});

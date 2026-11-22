@@ -2,6 +2,7 @@
 # AudioReach topology for Lenovo Xiaoxin Pad Pro GT 13 (TB378FC):
 #  - Playback: MultiMedia1 (S16_LE, 48 kHz, 4ch FL/FR/RL/RR) -> Secondary TDM0
 #              (4x AW88480 amplifiers on TDM slots 0..3: BL, TL, TR, BR)
+#  - DP Audio: MultiMedia2 (S24_LE, 48 kHz, 2ch) -> DISPLAY_PORT_RX_0 (USB-C DP0)
 #  - Capture:  TX_CODEC_DMA_TX_3 (S16_LE, 48 kHz, 2ch WCD9390 AMIC1+AMIC4)
 #              -> MultiMedia3 (PCM2c)
 include(`audioreach/audioreach.m4')
@@ -19,6 +20,11 @@ STREAM_SG_PCM_ADD(audioreach/subgraph-stream-vol-playback.m4, FRONTEND_DAI_MULTI
 	`S16_LE', 48000, 48000, 2, 4,
 	0x00004001, 0x00004001, 0x00006001, `110000')
 
+# USB-C DisplayPort audio playback stream (PCM1p, S24_LE stereo, independent of speaker/mic PCMs)
+STREAM_SG_PCM_ADD(audioreach/subgraph-stream-vol-playback.m4, FRONTEND_DAI_MULTIMEDIA2,
+	`S24_LE', 48000, 48000, 2, 2,
+	0x00004002, 0x00004002, 0x00006030, `110000')
+
 # Dual-microphone capture stream + TX_CODEC_DMA_TX_3 device subgraph (WCD9390 ADC1+ADC3)
 STREAM_SG_PCM_ADD(audioreach/subgraph-stream-capture.m4, FRONTEND_DAI_MULTIMEDIA3,
 	`S16_LE', 48000, 48000, 1, 2,
@@ -31,6 +37,15 @@ DEVICE_SG_ADD(audioreach/subgraph-device-codec-dma-capture.m4, `TX_CODEC_DMA_TX_
 
 STREAM_DEVICE_CAPTURE_MIXER(FRONTEND_DAI_MULTIMEDIA3, ``TX_CODEC_DMA_TX_3'')
 STREAM_DEVICE_CAPTURE_ROUTE(FRONTEND_DAI_MULTIMEDIA3, ``MultiMedia3 Mixer'', ``TX_CODEC_DMA_TX_3, device120.logger1'')
+
+# USB-C DisplayPort 0 RX device subgraph
+DEVICE_SG_ADD(audioreach/subgraph-device-display-port-playback.m4, `DISPLAY_PORT_RX_0', DISPLAY_PORT_RX_0,
+	`S24_LE', 48000, 48000, 2, 2,
+	0, 0, 0, DATA_FORMAT_FIXED_POINT,
+	0x00004011, 0x00004011, 0x00006120, `DISPLAY_PORT_RX_0')
+
+STREAM_DEVICE_PLAYBACK_MIXER(DISPLAY_PORT_RX_0, ``DISPLAY_PORT_RX_0'', ``MultiMedia2'')
+STREAM_DEVICE_PLAYBACK_ROUTE(DISPLAY_PORT_RX_0, ``DISPLAY_PORT_RX_0 Audio Mixer'', ``MultiMedia2, stream1.logger1'')
 
 # Secondary legacy TDM playback: LOG -> MFC -> 4-slot 32-bit TDM endpoint on lane SD1
 define(`NAME_PREFIX', `device40') dnl

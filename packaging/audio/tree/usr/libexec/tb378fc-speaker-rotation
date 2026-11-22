@@ -1,6 +1,11 @@
 #!/usr/bin/python3
 # SPDX-License-Identifier: MIT
-"""Map stereo/quad playback to Lenovo TB378FC's four speaker positions as GNOME rotates."""
+'''Map stereo/quad playback to Lenovo TB378FC's four speaker positions as GNOME rotates.
+
+Event-driven on org.gnome.Mutter.DisplayConfig MonitorsChanged without spawning
+a persistent `pw-dump --monitor` stream, and keeps the smart-filter input node
+at unity volume (1.0) so WirePlumber never leaves hidden attenuation on it.
+'''
 import json
 import subprocess
 import sys
@@ -13,6 +18,8 @@ from gi.repository import Gio, GLib
 BUS = "org.gnome.Mutter.DisplayConfig"
 PATH = "/org/gnome/Mutter/DisplayConfig"
 IFACE = "org.gnome.Mutter.DisplayConfig"
+# +1.6 dB makeup gain compensating for the 560 Hz / 4.2 kHz enclosure EQ notches
+MATRIX_GAIN = 1.20
 
 
 class SpeakerRotation:
@@ -24,29 +31,11 @@ class SpeakerRotation:
         )
         self.last_transform = None
         self.last_node = None
-        self.pw = Gio.Subprocess.new(["pw-dump", "--monitor"], Gio.SubprocessFlags.STDOUT_PIPE)
-        self.events = Gio.DataInputStream.new(self.pw.get_stdout_pipe())
-        self.watch_pipewire()
+        self.retry_attempts = 0
         self.connection.signal_subscribe(
             BUS, IFACE, "MonitorsChanged", PATH, None,
             Gio.DBusSignalFlags.NONE, self.on_monitors_changed, None
         )
-
-    def watch_pipewire(self):
-        self.events.read_line_async(GLib.PRIORITY_DEFAULT, None, self.pipewire_changed)
-
-    def pipewire_changed(self, stream, result):
-        try:
-            line, _length = stream.read_line_finish(result)
-            if line is None:
-                return
-            key, _, value = line.strip().partition(b":")
-            if (key == b'"node.name"' and
-                    value.strip().rstrip(b",") == json.dumps(self.config["control_node"]).encode()):
-                self.update()
-            self.watch_pipewire()
-        except GLib.Error:
-            pass
 
     def on_monitors_changed(self, *_args):
         self.update()
@@ -76,45 +65,79 @@ class SpeakerRotation:
         for name, source in zip(names, route):
             for channel in range(4):
                 params.extend((f"{name}:Gain {channel + 1}",
-                               1.0 if source == channel else 0.0))
-        dump = subprocess.run(["pw-dump"], check=True, text=True,
-                              stdout=subprocess.PIPE, timeout=5)
-        nodes = json.loads(dump.stdout)
+                               MATRIX_GAIN if source == channel else 0.0))
         target = self.config["control_node"]
+        dump = subprocess.run(
+            ["pw-dump", target],
+            check=True,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            timeout=5,
+        )
+        nodes = json.loads(dump.stdout)
         node = next(
             obj for obj in nodes
             if obj.get("type", "").endswith(":Node")
             and obj.get("info", {}).get("props", {}).get("node.name") == target
         )
         node_id = node["id"]
-        identity = (node_id, node["info"]["props"]["object.serial"])
-        if self.last_node == identity and self.last_transform == transform:
-            return
+        identity = (node_id, node["info"]["props"].get("object.serial"))
+
+        # Always keep the hidden filter.smart node at unity 1.0 channelVolumes
+        # so GNOME's volume slider on HiFi__Speaker__sink has full dynamic range.
         subprocess.run(
-            ["pw-cli", "set-param", str(node_id), "Props",
-             json.dumps({"params": params}, separators=(",", ":"))],
-            check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
-            text=True, timeout=5,
+            ["wpctl", "set-mute", str(node_id), "0"],
+            check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=5,
         )
-        self.last_transform = transform
+        subprocess.run(
+            ["wpctl", "set-volume", str(node_id), "1.0"],
+            check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=5,
+        )
+        subprocess.run(
+            [
+                "pw-cli",
+                "set-param",
+                str(node_id),
+                "Props",
+                json.dumps({"params": params}, separators=(",", ":")),
+            ],
+            check=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=5,
+        )
         self.last_node = identity
+        self.last_transform = transform
+
+    def retry(self):
+        self.retry_attempts += 1
+        if self.update():
+            self.retry_attempts = 0
+            return False
+        return self.retry_attempts < 30
 
     def update(self):
         try:
-            transform = self.internal_transform()
-            self.set_matrix(transform)
-        except (GLib.Error, RuntimeError, StopIteration, KeyError, ValueError,
-                subprocess.SubprocessError) as exc:
-            print(f"speaker-rotation: {exc}", file=sys.stderr, flush=True)
+            self.set_matrix(self.internal_transform())
+            return True
+        except Exception as exc:
+            print(f"speaker-rotation deferred: {exc}", file=sys.stderr, flush=True)
+            return False
 
 
 def main():
-    if len(sys.argv) != 2:
-        raise SystemExit("usage: tb378fc-speaker-rotation CONFIG.json")
-    with open(sys.argv[1], encoding="utf-8") as stream:
-        config = json.load(stream)
-    service = SpeakerRotation(config)
-    service.update()
+    config_path = (
+        sys.argv[1]
+        if len(sys.argv) > 1
+        else "/usr/share/tb378fc-audio/speaker-rotation/config.json"
+    )
+    with open(config_path, encoding="utf-8") as handle:
+        config = json.load(handle)
+    daemon = SpeakerRotation(config)
+    if not daemon.update():
+        GLib.timeout_add(500, daemon.retry)
     GLib.MainLoop().run()
 
 

@@ -138,6 +138,19 @@ def main() -> int:
     revs = ensure_sources(args.sources_dir.resolve(), lock)
     sroot = args.sources_dir.resolve()
 
+    # Keep hexagonrpcd alive when ADSP probes optional unsupported apps_std methods (e.g. method 36)
+    lc = sroot / "hexagonrpc/hexagonrpcd/listener.c"
+    lc_txt = lc.read_text(encoding="utf-8")
+    lc_txt = lc_txt.replace(
+        '*result = AEE_EUNSUPPORTED;\n\t\treturn 1;',
+        '*returned = NULL;\n\t\t*result = AEE_EUNSUPPORTED;\n\t\treturn 0;',
+    )
+    lc_txt = lc_txt.replace(
+        'n_outbufs = REMOTE_SCALARS_OUTBUFS(sc);',
+        'n_outbufs = returned != NULL ? REMOTE_SCALARS_OUTBUFS(sc) : 0;',
+    )
+    lc.write_text(lc_txt, encoding="utf-8")
+
     # 1. Build native host qmic code generator
     host_bin = work / "host-bin"
     host_bin.mkdir(parents=True, exist_ok=True)
@@ -362,14 +375,16 @@ def main() -> int:
     udev_dir.mkdir(parents=True, exist_ok=True)
     (udev_dir / "90-tb378fc-fastrpc.rules").write_text(
         'SUBSYSTEM=="misc", KERNEL=="fastrpc-*", GROUP="fastrpc", MODE="0660"\n'
+        'SUBSYSTEM=="misc", KERNEL=="fastrpc-adsp-secure", SYMLINK+="fastrpc-adsp", TAG+="systemd", '
+        'ENV{SYSTEMD_WANTS}+="hexagonrpcd-adsp-sensorspd.service"\n'
         'SUBSYSTEM=="misc", KERNEL=="fastrpc-adsp", TAG+="systemd", '
-        'ENV{SYSTEMD_WANTS}+="hexagonrpcd-adsp-rootpd.service hexagonrpcd-adsp-sensorspd.service"\n',
+        'ENV{SYSTEMD_WANTS}+="hexagonrpcd-adsp-sensorspd.service"\n',
         encoding="utf-8",
     )
 
     wants = stage / "etc/systemd/system/multi-user.target.wants"
     wants.mkdir(parents=True, exist_ok=True)
-    for u in ("hexagonrpcd-adsp-rootpd.service", "hexagonrpcd-adsp-sensorspd.service", "tb378fc-sensord.service"):
+    for u in ("hexagonrpcd-adsp-sensorspd.service", "tb378fc-sensord.service"):
         (wants / u).symlink_to(f"/usr/lib/systemd/system/{u}")
 
     # 7. Licenses & source provenance

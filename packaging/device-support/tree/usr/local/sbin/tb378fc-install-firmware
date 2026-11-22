@@ -21,8 +21,14 @@ import sys
 TARGETS = {
     "vpu35_4v.mbn": "qcom/sm8750/tb378fc/vpu35_4v.mbn",
     "gen80000_zap.mbn": "qcom/sm8750/tb378fc/gen80000_zap.mbn",
+    "gen80000_gmu.bin": "qcom/gen80000_gmu.bin",
+    "gen80000_sqe.fw": "qcom/gen80000_sqe.fw",
+    "gen80000_aqe.fw": "qcom/gen80000_aqe.fw",
     "adsp.mdt": "qcom/sm8750/tb378fc/adsp.mdt",
     "adsp_dtb.mdt": "qcom/sm8750/tb378fc/adsp_dtb.mdt",
+    "cdsp.mdt": "qcom/sm8750/tb378fc/cdsp.mdt",
+    "cdsp_dtb.mdt": "qcom/sm8750/tb378fc/cdsp_dtb.mdt",
+    "battmgr.jsn": "qcom/sm8750/tb378fc/battmgr.jsn",
     "tb378fc.bin": "novatek/tb378fc.bin",
     "novatek_ts_fw.bin": "novatek/tb378fc.bin",
     "aw88480-native-music.acf": "awinic/tb378fc/aw88480-native-music.acf",
@@ -180,7 +186,7 @@ def install_sensors(src_roots: list[Path], rootfs: Path) -> int:
                 shutil.copy2(f, dst)
                 dst.chmod(0o644)
                 count += 1
-            elif f.name in ("sns_reg_config", "sns_reg.conf"):
+            elif f.name == "sns_reg.conf" or (f.name == "sns_reg_config" and "registry" not in parts and not f.read_bytes().lstrip().startswith(b"{")):
                 qcom_sensors.mkdir(parents=True, exist_ok=True)
                 dst = qcom_sensors / "sns_reg.conf"
                 shutil.copy2(f, dst)
@@ -246,11 +252,14 @@ def main() -> int:
             dst.chmod(0o644)
             installed.append((rel_acf, dst.stat().st_size, sha256(dst)[:16]))
             continue
-        elif name.startswith(("adsp.b", "adsp_dtb.b", "adspr.", "adsps.", "adspua.", "adspuo.")):
+        elif name.startswith(("adsp.b", "adsp_dtb.b", "adspr.", "adsps.", "adspua.", "adspuo.",
+                              "cdsp.b", "cdsp_dtb.b", "cdspr.")):
             rel_dst = f"qcom/sm8750/tb378fc/{name}"
         elif name in ("amss.bin", "m3.bin", "board-2.bin", "regdb.bin", "qdss.cfg", "aux_ucode.bin", "bdwlan.elf"):
             rel_dst = f"ath12k/WCN7860/hw2.0/{name}"
-        elif name.startswith(("gngbtfw", "gngbtnv", "brhbtfw", "brhbtnv")):
+        elif name == "phy_ucode20.elf" and not (fw_root / "ath12k/WCN7860/hw2.0/m3.bin").exists():
+            rel_dst = "ath12k/WCN7860/hw2.0/m3.bin"
+        elif name.startswith(("gngbtfw", "gngbtnv", "brhbtfw", "brhbtnv", "brhperifw", "brhperinv")):
             rel_dst = f"qca/{name}"
         if rel_dst:
             dst = fw_root / rel_dst
@@ -258,6 +267,11 @@ def main() -> int:
             shutil.copy2(f, dst)
             dst.chmod(0o644)
             installed.append((rel_dst, dst.stat().st_size, sha256(dst)[:16]))
+            if name == "battmgr.jsn":
+                alt = fw_root / "qcom/sm8750/battmgr.jsn"
+                alt.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(f, alt)
+                alt.chmod(0o644)
 
     sensor_roots = [src]
     if args.sensors_dir:

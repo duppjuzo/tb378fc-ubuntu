@@ -4,8 +4,9 @@
  *
  * Adapted from PickaxeHit/linux-zhiyu sensors/sensord.c for Ubuntu 26.04 GNOME:
  *  - Publishes net.hadess.SensorProxy (4-quadrant accelerometer + ambient light)
- *    with Android-style low-pass filtering, flat-table lock, and hysteresis
- *    calibrated to Lenovo TB378FC's landscape-native sensor frame.
+ *    with Android-style low-pass filtering, flat-table lock, hysteresis, and
+ *    dynamic PropertiesChanged notifications so GNOME gsd-power immediately
+ *    exposes the Automatic Screen Brightness toggle.
  *  - Decodes Qualcomm SSC sns_hall_event (msg 770) and emits SW_LID on a
  *    persistent /dev/uinput switch ("TB378FC Folio Lid") so systemd-logind
  *    suspends on magnetic cover close and wakes on open.
@@ -55,7 +56,6 @@ static const gchar introspection_xml[] =
 typedef enum {
 	STREAM_LIGHT,
 	STREAM_ACCEL,
-	STREAM_GYRO,
 	STREAM_HALL,
 	STREAM_COUNT,
 } StreamType;
@@ -75,6 +75,7 @@ struct Sensord {
 	guint reg_id;
 
 	gboolean has_light;
+	gboolean light_claimed;
 	gdouble light;
 	gboolean has_accel;
 	gboolean accel_claimed;
@@ -122,8 +123,6 @@ static gboolean notify_ready(gpointer user_data)
 		return G_SOURCE_CONTINUE;
 	}
 	self->ready_notified = TRUE;
-	if (self->lid_fd < 0)
-		g_message("Hall input not yet ready; desktop startup proceeding");
 	return G_SOURCE_REMOVE;
 }
 
@@ -134,6 +133,8 @@ static void emit_property(Sensord *self, const gchar *name, GVariant *value)
 	GVariantBuilder changed;
 	GVariant *invalid;
 
+	if (!self->conn)
+		return;
 	g_variant_builder_init(&changed, G_VARIANT_TYPE("a{sv}"));
 	g_variant_builder_add(&changed, "{sv}", name, value);
 	invalid = g_variant_new_strv(NULL, 0);
@@ -143,6 +144,22 @@ static void emit_property(Sensord *self, const gchar *name, GVariant *value)
 				      g_variant_new("(sa{sv}@as)", IFACE,
 						    &changed, invalid),
 				      NULL);
+}
+
+static void set_has_light(Sensord *self, gboolean val)
+{
+	if (self->has_light == val)
+		return;
+	self->has_light = val;
+	emit_property(self, "HasAmbientLight", g_variant_new_boolean(val));
+}
+
+static void set_has_accel(Sensord *self, gboolean val)
+{
+	if (self->has_accel == val)
+		return;
+	self->has_accel = val;
+	emit_property(self, "HasAccelerometer", g_variant_new_boolean(val));
 }
 
 static const gchar *const quadrant_names[4] = {
@@ -180,48 +197,47 @@ static void accel_process(Sensord *self, gdouble x, gdouble y, gdouble z)
 	}
 	self->last_sample_us = now;
 
-	magnitude = sqrt(self->fx * self->fx + self->fy * self->fy +
-			 self->fz * self->fz);
-
-	if (magnitude < g - 4.0 || magnitude > g + 4.0) {
-		self->candidate_quadrant = -1;
-		self->accel_until_us = now + 500000;
+	magnitude = sqrt(self->fx * self->fx + self->fy * self->fy + self->fz * self->fz);
+	if (magnitude < 0.1)
 		return;
-	}
-	if (now < self->accel_until_us) {
-		self->candidate_quadrant = -1;
-		return;
-	}
 
-	tilt = asin(CLAMP(self->fz / magnitude, -1.0, 1.0)) * rad_to_deg;
-
-	if (fabs(tilt) > 75.0) {
-		if (self->flat_since_us == 0)
-			self->flat_since_us = now;
-		if (now - self->flat_since_us >= 800000)
-			self->flat = TRUE;
-		self->candidate_quadrant = -1;
+	if (fabs(magnitude - g) > 4.0)
+		self->accel_until_us = now + 300000;
+	if (now < self->accel_until_us)
 		return;
-	}
 
-	self->flat_since_us = 0;
-	if (self->flat) {
-		self->flat = FALSE;
-		self->flat_end_us = now;
+	tilt = fabs(asin(CLAMP(self->fz / magnitude, -1.0, 1.0)) * rad_to_deg);
+	if (tilt > 75.0) {
+		if (!self->flat) {
+			if (self->flat_since_us == 0)
+				self->flat_since_us = now;
+			else if (now - self->flat_since_us >= 1000000)
+				self->flat = TRUE;
+		}
+		self->flat_end_us = 0;
+	} else {
+		self->flat_since_us = 0;
+		if (self->flat) {
+			if (self->flat_end_us == 0)
+				self->flat_end_us = now;
+			else if (now - self->flat_end_us >= 500000)
+				self->flat = FALSE;
+		}
 	}
-	if (now < self->flat_end_us + 500000) {
-		self->candidate_quadrant = -1;
+	if (self->flat)
 		return;
-	}
+
+	if (tilt > 65.0)
+		return;
 
 	angle = atan2(-self->fx, self->fy) * rad_to_deg;
-	if (angle < 0)
+	if (angle < 0.0)
 		angle += 360.0;
-	quadrant = ((gint)((angle + 45.0) / 90.0)) % 4;
+
+	quadrant = ((gint)floor((angle + 45.0) / 90.0)) & 3;
 
 	if (self->current_quadrant < 0) {
 		self->current_quadrant = quadrant;
-		self->candidate_quadrant = -1;
 		set_orientation(self, quadrant_names[quadrant]);
 		return;
 	}
@@ -293,13 +309,10 @@ static void set_orientation(Sensord *self, const gchar *orientation)
 	self->orientation = g_strdup(orientation);
 	if (self->accel_claimed)
 		set_spk_rotation(self->orientation);
-	if (self->conn)
-		emit_property(self, "AccelerometerOrientation",
-			      g_variant_new_string(self->orientation));
+	emit_property(self, "AccelerometerOrientation",
+		      g_variant_new_string(self->orientation));
 }
 
-/* sns_hall_event (message 770): field 1 is FAR=0 / NEAR=1,
- * field 2 is sample quality (0=unreliable, 1..3=valid). */
 static gboolean read_varint(const guint8 **p, const guint8 *end, guint64 *value)
 {
 	*value = 0;
@@ -410,6 +423,18 @@ static void update_lid(Sensord *self, int closed)
 	notify_ready(self);
 }
 
+static void cleanup_stream(Stream *stream)
+{
+	Sensord *self = stream->self;
+	if (self->streams[stream->type] == stream)
+		self->streams[stream->type] = NULL;
+	g_subprocess_force_exit(stream->proc);
+	g_subprocess_wait_async(stream->proc, NULL, NULL, NULL);
+	g_object_unref(stream->proc);
+	g_object_unref(stream->out);
+	g_free(stream);
+}
+
 static void read_stream_cb(GObject *source, GAsyncResult *res, gpointer user_data)
 {
 	Stream *stream = user_data;
@@ -421,18 +446,19 @@ static void read_stream_cb(GObject *source, GAsyncResult *res, gpointer user_dat
 	line = g_data_input_stream_read_line_finish(dis, res, &len, &error);
 	if (!line) {
 		if (error) {
-			g_warning("sensh stream read: %s", error->message);
+			g_warning("sensh stream %d read error: %s", stream->type, error->message);
 			g_error_free(error);
+		} else {
+			g_warning("sensh stream %d ended; scheduling reconnect", stream->type);
 		}
-		if (stream->type == STREAM_HALL) {
-			g_warning("Hall stream ended; retrying subscription");
-			stream->self->streams[STREAM_HALL] = NULL;
-			g_subprocess_force_exit(stream->proc);
-			g_subprocess_wait(stream->proc, NULL, NULL);
-			g_object_unref(stream->proc);
-			g_object_unref(stream->out);
-			g_free(stream);
-		}
+		cleanup_stream(stream);
+		return;
+	}
+
+	if (strstr(line, "sensor core left")) {
+		g_free(line);
+		g_warning("ADSP sensor core restarted; reconnecting stream %d", stream->type);
+		cleanup_stream(stream);
 		return;
 	}
 
@@ -447,20 +473,18 @@ static void read_stream_cb(GObject *source, GAsyncResult *res, gpointer user_dat
 		if (stream->type == STREAM_LIGHT) {
 			gdouble value = g_ascii_strtod(p, NULL);
 			if (value >= 0.0) {
-				stream->self->has_light = TRUE;
-				if (value != stream->self->light) {
+				set_has_light(stream->self, TRUE);
+				if (fabs(value - stream->self->light) >= 0.05 || stream->self->light == 0.0) {
 					stream->self->light = value;
 					emit_property(stream->self, "LightLevel",
 						      g_variant_new_double(value));
 				}
 			}
-		} else {
+		} else if (stream->type == STREAM_ACCEL) {
 			gdouble x = 0, y = 0, z = 0;
 			if (sscanf(p, "%lf,%lf,%lf", &x, &y, &z) == 3) {
-				if (stream->type == STREAM_ACCEL) {
-					stream->self->has_accel = TRUE;
-					accel_process(stream->self, x, y, z);
-				}
+				set_has_accel(stream->self, TRUE);
+				accel_process(stream->self, x, y, z);
 			}
 		}
 	}
@@ -487,7 +511,7 @@ static gchar *lookup_suid(const gchar *type)
 		g_string_free(out, TRUE);
 		return NULL;
 	}
-	gint64 deadline = g_get_monotonic_time() + 2 * G_TIME_SPAN_SECOND;
+	gint64 deadline = g_get_monotonic_time() + 1500 * G_TIME_SPAN_MILLISECOND;
 	while (g_get_monotonic_time() < deadline) {
 		struct pollfd pfd = { .fd = fd, .events = POLLIN };
 		int ms = (int)((deadline - g_get_monotonic_time() + 999) / 1000);
@@ -541,12 +565,11 @@ static Stream *start_stream(Sensord *self, StreamType type, const gchar *suid,
 	if (type == STREAM_HALL) {
 		stream->proc = g_subprocess_new(G_SUBPROCESS_FLAGS_STDOUT_PIPE |
 				G_SUBPROCESS_FLAGS_STDERR_SILENCE, &error,
-				"/usr/bin/stdbuf", "-oL", SENSH, "watch", suid, NULL);
+				SENSH, "watch", suid, NULL);
 	} else {
 		stream->proc = g_subprocess_new(G_SUBPROCESS_FLAGS_STDOUT_PIPE |
 				G_SUBPROCESS_FLAGS_STDERR_SILENCE, &error,
-				"/usr/bin/stdbuf", "-oL", SENSH, "monitor",
-				"-r", rate, suid, NULL);
+				SENSH, "config", suid, rate, NULL);
 	}
 	if (!stream->proc) {
 		g_warning("start sensh stream: %s", error->message);
@@ -563,46 +586,33 @@ static Stream *start_stream(Sensord *self, StreamType type, const gchar *suid,
 	return stream;
 }
 
-static void start_sensor(Sensord *self)
-{
-	gchar *light, *accel, *gyro;
-
-	self->has_light = TRUE;
-	self->has_accel = TRUE;
-	self->current_quadrant = -1;
-
-	light = lookup_suid("ambient_light");
-	if (light) {
-		g_message("ambient_light SUID %s", light);
-		self->streams[STREAM_LIGHT] =
-			start_stream(self, STREAM_LIGHT, light, "10");
-		g_free(light);
-	} else {
-		self->has_light = FALSE;
-	}
-
-	accel = lookup_suid("accel");
-	if (accel) {
-		g_message("accel SUID %s", accel);
-		self->streams[STREAM_ACCEL] =
-			start_stream(self, STREAM_ACCEL, accel, "50");
-		g_free(accel);
-	} else {
-		self->has_accel = FALSE;
-	}
-
-	gyro = lookup_suid("gyro");
-	if (gyro) {
-		g_message("gyro SUID %s", gyro);
-		self->streams[STREAM_GYRO] =
-			start_stream(self, STREAM_GYRO, gyro, "50");
-		g_free(gyro);
-	}
-}
-
-static gboolean maintain_hall(gpointer user_data)
+static gboolean maintain_sensors(gpointer user_data)
 {
 	Sensord *self = user_data;
+
+	if (!self->streams[STREAM_LIGHT]) {
+		gchar *light = lookup_suid("ambient_light");
+		if (light) {
+			g_message("ambient_light SUID %s", light);
+			self->streams[STREAM_LIGHT] =
+				start_stream(self, STREAM_LIGHT, light, "5");
+			g_free(light);
+			if (self->streams[STREAM_LIGHT])
+				set_has_light(self, TRUE);
+		}
+	}
+
+	if (!self->streams[STREAM_ACCEL]) {
+		gchar *accel = lookup_suid("accel");
+		if (accel) {
+			g_message("accel SUID %s", accel);
+			self->streams[STREAM_ACCEL] =
+				start_stream(self, STREAM_ACCEL, accel, "25");
+			g_free(accel);
+			if (self->streams[STREAM_ACCEL])
+				set_has_accel(self, TRUE);
+		}
+	}
 
 	if (!self->streams[STREAM_HALL]) {
 		gchar *hall = lookup_suid("hall");
@@ -633,7 +643,7 @@ static GVariant *get_property(GDBusConnection *connection,
 	if (g_strcmp0(property_name, "HasAccelerometer") == 0)
 		return g_variant_new_boolean(self->has_accel);
 	if (g_strcmp0(property_name, "AccelerometerOrientation") == 0)
-		return g_variant_new_string(self->orientation ?: "undefined");
+		return g_variant_new_string(self->orientation ?: "normal");
 	if (g_strcmp0(property_name, "AccelerometerTilt") == 0)
 		return g_variant_new_string("undefined");
 	if (g_strcmp0(property_name, "HasAmbientLight") == 0)
@@ -663,14 +673,24 @@ static void method_call(GDBusConnection *connection, const gchar *sender,
 	(void)object_path;
 	(void)parameters;
 
-	if (g_strcmp0(interface_name, IFACE) == 0 &&
-	    g_strcmp0(method_name, "ClaimAccelerometer") == 0) {
-		self->accel_claimed = TRUE;
-		if (self->orientation)
-			set_spk_rotation(self->orientation);
-	} else if (g_strcmp0(interface_name, IFACE) == 0 &&
-		   g_strcmp0(method_name, "ReleaseAccelerometer") == 0) {
-		self->accel_claimed = FALSE;
+	if (g_strcmp0(interface_name, IFACE) == 0) {
+		if (g_strcmp0(method_name, "ClaimAccelerometer") == 0) {
+			self->accel_claimed = TRUE;
+			if (self->orientation) {
+				set_spk_rotation(self->orientation);
+				emit_property(self, "AccelerometerOrientation",
+					      g_variant_new_string(self->orientation));
+			}
+		} else if (g_strcmp0(method_name, "ReleaseAccelerometer") == 0) {
+			self->accel_claimed = FALSE;
+		} else if (g_strcmp0(method_name, "ClaimLight") == 0) {
+			self->light_claimed = TRUE;
+			if (self->has_light)
+				emit_property(self, "LightLevel",
+					      g_variant_new_double(self->light));
+		} else if (g_strcmp0(method_name, "ReleaseLight") == 0) {
+			self->light_claimed = FALSE;
+		}
 	}
 
 	g_dbus_method_invocation_return_value(invocation, NULL);
@@ -714,15 +734,14 @@ static void on_name_acquired(GDBusConnection *connection, const gchar *name,
 	(void)connection;
 	(void)name;
 
-	start_sensor(self);
-	maintain_hall(self);
+	maintain_sensors(self);
 	if (!self->streams[STREAM_HALL])
 		g_timeout_add_seconds(3, notify_ready, self);
 }
 
 int main(void)
 {
-	Sensord self = { .lid_fd = -1, .lid_state = -1 };
+	Sensord self = { .current_quadrant = -1, .lid_fd = -1, .lid_state = -1 };
 	GMainLoop *loop;
 
 	loop = g_main_loop_new(NULL, FALSE);
@@ -732,7 +751,7 @@ int main(void)
 		G_BUS_NAME_OWNER_FLAGS_ALLOW_REPLACEMENT | G_BUS_NAME_OWNER_FLAGS_REPLACE,
 		on_bus_acquired, on_name_acquired, NULL, &self, NULL);
 
-	g_timeout_add_seconds(5, maintain_hall, &self);
+	g_timeout_add_seconds(5, maintain_sensors, &self);
 	g_timeout_add_seconds(12, notify_ready, &self);
 	g_main_loop_run(loop);
 	g_main_loop_unref(loop);

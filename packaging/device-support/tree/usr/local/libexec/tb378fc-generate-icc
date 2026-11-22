@@ -1,0 +1,170 @@
+#!/usr/bin/env python3
+'''Generate ICC v4.4 wide-gamut color profiles for Lenovo TB378FC (CSOT NT36526 3.5K).'''
+
+import ctypes
+from ctypes import POINTER, Structure, byref, c_char_p, c_double, c_int, c_uint32, c_void_p
+import os
+import sys
+
+lcms = ctypes.CDLL("liblcms2.so.2")
+
+
+class cmsCIExyY(Structure):
+    _fields_ = [("x", c_double), ("y", c_double), ("Y", c_double)]
+
+
+class cmsCIExyYTRIPLE(Structure):
+    _fields_ = [("Red", cmsCIExyY), ("Green", cmsCIExyY), ("Blue", cmsCIExyY)]
+
+
+def sig(fourcc: str) -> int:
+    b = fourcc.encode("ascii")
+    return (b[0] << 24) | (b[1] << 16) | (b[2] << 8) | b[3]
+
+
+lcms.cmsCreateRGBProfile.argtypes = [POINTER(cmsCIExyY), POINTER(cmsCIExyYTRIPLE), POINTER(c_void_p)]
+lcms.cmsCreateRGBProfile.restype = c_void_p
+
+lcms.cmsBuildParametricToneCurve.argtypes = [c_void_p, c_int, POINTER(c_double)]
+lcms.cmsBuildParametricToneCurve.restype = c_void_p
+
+lcms.cmsBuildGamma.argtypes = [c_void_p, c_double]
+lcms.cmsBuildGamma.restype = c_void_p
+
+lcms.cmsFreeToneCurve.argtypes = [c_void_p]
+lcms.cmsFreeToneCurve.restype = None
+
+lcms.cmsMLUalloc.argtypes = [c_void_p, c_uint32]
+lcms.cmsMLUalloc.restype = c_void_p
+
+lcms.cmsMLUfree.argtypes = [c_void_p]
+lcms.cmsMLUfree.restype = None
+
+lcms.cmsMLUsetWide.argtypes = [c_void_p, c_char_p, c_char_p, ctypes.c_wchar_p]
+lcms.cmsMLUsetWide.restype = c_int
+
+lcms.cmsWriteTag.argtypes = [c_void_p, c_uint32, c_void_p]
+lcms.cmsWriteTag.restype = c_int
+
+lcms.cmsDictAlloc.argtypes = [c_void_p]
+lcms.cmsDictAlloc.restype = c_void_p
+
+lcms.cmsDictFree.argtypes = [c_void_p]
+lcms.cmsDictFree.restype = None
+
+lcms.cmsDictAddEntry.argtypes = [
+    c_void_p,
+    ctypes.c_wchar_p,
+    ctypes.c_wchar_p,
+    c_void_p,
+    c_void_p,
+]
+lcms.cmsDictAddEntry.restype = c_int
+
+lcms.cmsSetHeaderRenderingIntent.argtypes = [c_void_p, c_uint32]
+lcms.cmsSetHeaderRenderingIntent.restype = None
+
+lcms.cmsMD5computeID.argtypes = [c_void_p]
+lcms.cmsMD5computeID.restype = c_int
+
+lcms.cmsSaveProfileToFile.argtypes = [c_void_p, c_char_p]
+lcms.cmsSaveProfileToFile.restype = c_int
+
+lcms.cmsCloseProfile.argtypes = [c_void_p]
+lcms.cmsCloseProfile.restype = c_int
+
+
+def write_mlu(hprof: int, tag_fourcc: str, en_text: str, zh_text: str | None = None) -> None:
+    mlu = lcms.cmsMLUalloc(None, 2 if zh_text else 1)
+    lcms.cmsMLUsetWide(mlu, b"en", b"US", en_text)
+    if zh_text:
+        lcms.cmsMLUsetWide(mlu, b"zh", b"CN", zh_text)
+    if not lcms.cmsWriteTag(hprof, sig(tag_fourcc), mlu):
+        raise RuntimeError(f"Failed to write MLU tag {tag_fourcc}")
+    lcms.cmsMLUfree(mlu)
+
+
+def build_p3_profile(
+    out_path: str,
+    title_en: str,
+    title_zh: str,
+    use_srgb_trc: bool,
+    auto_map_device: str | None = None,
+) -> None:
+    d65 = cmsCIExyY(0.3127, 0.3290, 1.0)
+    p3_primaries = cmsCIExyYTRIPLE(
+        cmsCIExyY(0.6800, 0.3200, 1.0),  # Red (DCI-P3)
+        cmsCIExyY(0.2650, 0.6900, 1.0),  # Green (DCI-P3)
+        cmsCIExyY(0.1500, 0.0600, 1.0),  # Blue (DCI-P3)
+    )
+
+    if use_srgb_trc:
+        params = (c_double * 5)(2.4, 1.0 / 1.055, 0.055 / 1.055, 1.0 / 12.92, 0.04045)
+        curve = lcms.cmsBuildParametricToneCurve(None, 4, params)
+    else:
+        curve = lcms.cmsBuildGamma(None, 2.2)
+
+    curves = (c_void_p * 3)(curve, curve, curve)
+    hprof = lcms.cmsCreateRGBProfile(byref(d65), byref(p3_primaries), curves)
+    lcms.cmsFreeToneCurve(curve)
+    if not hprof:
+        raise RuntimeError("cmsCreateRGBProfile failed")
+
+    lcms.cmsSetHeaderRenderingIntent(hprof, 0)
+
+    write_mlu(hprof, "desc", title_en, title_zh)
+    write_mlu(
+        hprof,
+        "cprt",
+        "CC0-1.0: No Rights Reserved (Public Domain)",
+        "CC0-1.0：无版权限制（公有领域）",
+    )
+    write_mlu(hprof, "dmnd", "Lenovo", "联想 Lenovo")
+    write_mlu(
+        hprof,
+        "dmdd",
+        "Xiaoxin Pad Pro GT 13 TB378FC (CSOT NT36526 3504x2190 Wide Gamut)",
+        "小新 Pad Pro GT 13 TB378FC（华星 NT36526 3.5K 广色域屏）",
+    )
+
+    hdict = lcms.cmsDictAlloc(None)
+    lcms.cmsDictAddEntry(hdict, "CMF_product", "tb378fc-device-support", None, None)
+    lcms.cmsDictAddEntry(hdict, "CMF_binary", "tb378fc-generate-icc", None, None)
+    lcms.cmsDictAddEntry(hdict, "License", "CC0-1.0", None, None)
+    lcms.cmsDictAddEntry(hdict, "DATA_source", "edid" if auto_map_device else "standard", None, None)
+    lcms.cmsDictAddEntry(hdict, "STANDARD_space", "display-p3" if use_srgb_trc else "dci-p3", None, None)
+    if auto_map_device:
+        lcms.cmsDictAddEntry(hdict, "MAPPING_device_id", auto_map_device, None, None)
+    if not lcms.cmsWriteTag(hprof, sig("meta"), hdict):
+        raise RuntimeError("Failed to write meta dict tag")
+    lcms.cmsDictFree(hdict)
+
+    lcms.cmsMD5computeID(hprof)
+    os.makedirs(os.path.dirname(out_path), exist_ok=True)
+    if not lcms.cmsSaveProfileToFile(hprof, out_path.encode("utf-8")):
+        raise RuntimeError(f"Failed to save ICC profile to {out_path}")
+    lcms.cmsCloseProfile(hprof)
+
+
+def main() -> int:
+    out_dir = sys.argv[1] if len(sys.argv) > 1 else "/usr/share/color/icc/colord"
+    build_p3_profile(
+        os.path.join(out_dir, "Lenovo-TB378FC-Display-P3.icc"),
+        "Lenovo TB378FC Display P3 (Wide Gamut)",
+        "联想小新 Pad Pro GT 13 Display P3 广色域",
+        use_srgb_trc=True,
+        auto_map_device="xrandr-DSI-1",
+    )
+    build_p3_profile(
+        os.path.join(out_dir, "Lenovo-TB378FC-DCI-P3-Gamma22.icc"),
+        "Lenovo TB378FC DCI-P3 (D65 Gamma 2.2)",
+        "联想小新 Pad Pro GT 13 DCI-P3 广色域 (Gamma 2.2)",
+        use_srgb_trc=False,
+        auto_map_device=None,
+    )
+    print("Generated TB378FC wide-gamut ICC profiles in", out_dir)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

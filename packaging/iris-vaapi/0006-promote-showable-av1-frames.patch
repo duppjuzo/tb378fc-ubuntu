@@ -1,0 +1,55 @@
+From: TB378FC Maintainers <tb378fc@localhost>
+Subject: [PATCH] av1: publish pixels for showable_frame=1 pictures used by show_existing_frame
+
+VA-API clients (GStreamer vaav1dec, FFmpeg, Firefox) never submit
+show_existing_frame OBUs to the decoder; instead they directly display the
+VASurface previously decoded with show_frame=0 and showable_frame=1.
+
+Qualcomm Iris VPU35 returns NOSHOW (no pixels published) whenever show_frame=0,
+leaving show_existing_frame surfaces blank on SVT-AV1 / random-access streams.
+Promote showable_frame=1 pictures to show_frame=1 in the translated OBU header
+and clear out.hidden so Iris VPU35 publishes bit-exact pixels to the surface.
+Verified on Lenovo TB378FC (SM8750P): 60/60 1080p8 & 45/45 4K8 bit-exact match
+against libaom, 4K10 P010 max diff <= 1 LSB at ~98 fps, zero dmesg errors.
+
+--- a/src/codec/av1_dpb.cc
++++ b/src/codec/av1_dpb.cc
+@@ -86,7 +86,13 @@
+         // session consumes the first as invisible and publishes the client's
+         // hidden picture on the second (session.cc). Marking the target shown
+         // makes both completions invisible and leaves the client waiting.
+-        out.hidden = params.pic_info_fields.bits.show_frame == 0;
++        // VA-API clients never submit show_existing_frame OBUs to the decoder;
++        // they directly display the surface previously decoded with
++        // show_frame=0 && showable_frame=1. Promote those pictures to shown so
++        // Qualcomm Iris publishes pixels instead of returning a NOSHOW buffer.
++        const bool promote_showable = (params.pic_info_fields.bits.show_frame == 0
++            && params.pic_info_fields.bits.showable_frame != 0);
++        out.hidden = (params.pic_info_fields.bits.show_frame == 0) && !promote_showable;
+         out.released_surface = VA_INVALID_ID;
+         out.completions = 1;
+ 
+@@ -121,6 +127,11 @@
+             av1_update_reference_gm(references_, hidden, hidden_refresh);
+ 
+             VADecPictureParameterBufferAV1 shown = params;
++            if (promote_showable) {
++                if (shown.pic_info_fields.bits.frame_type == 0)
++                    shown.pic_info_fields.bits.frame_type = 2; // INTRA_ONLY_FRAME
++                shown.pic_info_fields.bits.show_frame = 1;
++            }
+             remap_references(shown);
+             const int shown_slot = free_slot(params);
+             const uint8_t shown_refresh = resets ? 0xff
+@@ -141,6 +152,11 @@
+                 : Pending { params, std::move(tile_data), std::move(tiles), picture.surface_id, true };
+         } else {
+             VADecPictureParameterBufferAV1 remapped = params;
++            if (promote_showable) {
++                if (remapped.pic_info_fields.bits.frame_type == 0 && !starts_sequence)
++                    remapped.pic_info_fields.bits.frame_type = 2; // INTRA_ONLY_FRAME
++                remapped.pic_info_fields.bits.show_frame = 1;
++            }
+             remap_references(remapped);
+             const int slot = free_slot(params);
+             const uint8_t refresh = resets ? 0xff

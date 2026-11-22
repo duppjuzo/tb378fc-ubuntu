@@ -1,0 +1,34 @@
+#!/bin/sh
+export LC_ALL=C
+set -eu
+
+dev=""
+i=0
+while [ "$i" -lt 30 ]; do
+    dev=$(colormgr find-device xrandr-DSI-1 2>/dev/null | awk '/Object Path:/ {print $3; exit}') || true
+    if [ -n "$dev" ]; then
+        break
+    fi
+    i=$((i + 1))
+    sleep 0.5
+done
+
+[ -n "$dev" ] || exit 0
+
+p3_prof=$(colormgr find-profile-by-filename /usr/share/color/icc/colord/Lenovo-TB378FC-Display-P3.icc 2>/dev/null | awk '/Object Path:/ {print $3; exit}') || true
+p3_g22_prof=$(colormgr find-profile-by-filename /usr/share/color/icc/colord/Lenovo-TB378FC-DCI-P3-Gamma22.icc 2>/dev/null | awk '/Object Path:/ {print $3; exit}') || true
+srgb_prof=$(colormgr find-profile-by-filename /usr/share/color/icc/colord/sRGB.icc 2>/dev/null | awk '/Object Path:/ {print $3; exit}') || true
+
+# Remember which profile was Profile 1 (default) from colord mapping.db before adding alternates
+prev_default=$(colormgr find-device xrandr-DSI-1 2>/dev/null | awk '/Profile 1:/ {print $3; exit}') || true
+
+[ -n "$srgb_prof" ] && colormgr device-add-profile "$dev" "$srgb_prof" >/dev/null 2>&1 || true
+[ -n "$p3_g22_prof" ] && colormgr device-add-profile "$dev" "$p3_g22_prof" >/dev/null 2>&1 || true
+[ -n "$p3_prof" ] && colormgr device-add-profile "$dev" "$p3_prof" >/dev/null 2>&1 || true
+
+if [ -n "$prev_default" ]; then
+    prev_path=$(colormgr find-profile "$prev_default" 2>/dev/null | awk '/Object Path:/ {print $3; exit}') || true
+    [ -n "$prev_path" ] && colormgr device-make-profile-default "$dev" "$prev_path" >/dev/null 2>&1 || true
+elif [ -n "$p3_prof" ]; then
+    colormgr device-make-profile-default "$dev" "$p3_prof" >/dev/null 2>&1 || true
+fi

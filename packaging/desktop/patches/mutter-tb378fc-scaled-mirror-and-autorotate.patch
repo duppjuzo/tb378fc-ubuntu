@@ -1,0 +1,343 @@
+diff -urN '--exclude=debian' '--exclude=.pc' mutter-clean/clutter/clutter/clutter-stage-view.c mutter-ubuntu/clutter/clutter/clutter-stage-view.c
+--- mutter-clean/clutter/clutter/clutter-stage-view.c	2026-04-14 21:37:46.000000000 +0800
++++ mutter-ubuntu/clutter/clutter/clutter-stage-view.c	2026-11-23 00:21:40.023809655 +0800
+@@ -134,13 +134,56 @@
+  *
+  * Returns: (transfer none): a #CoglFramebuffer
+  */
++static void ensure_stage_view_offscreen (ClutterStageView *view);
++static void ensure_stage_view_offscreen_pipeline (ClutterStageView *view);
++
++gboolean
++clutter_stage_view_is_scaled_mirror (ClutterStageView *view)
++{
++  ClutterStageViewPrivate *priv =
++    clutter_stage_view_get_instance_private (view);
++  int onscreen_width, onscreen_height;
++  int stage_fb_width, stage_fb_height;
++  int expected_width, expected_height;
++
++  if (!priv->framebuffer ||
++      priv->layout.width <= 0 ||
++      priv->layout.height <= 0 ||
++      priv->scale <= 0.f)
++    return FALSE;
++
++  onscreen_width = cogl_framebuffer_get_width (priv->framebuffer);
++  onscreen_height = cogl_framebuffer_get_height (priv->framebuffer);
++  stage_fb_width = (int) roundf (priv->layout.width * priv->scale);
++  stage_fb_height = (int) roundf (priv->layout.height * priv->scale);
++
++  if (mtk_monitor_transform_is_rotated (priv->transform))
++    {
++      expected_width = stage_fb_height;
++      expected_height = stage_fb_width;
++    }
++  else
++    {
++      expected_width = stage_fb_width;
++      expected_height = stage_fb_height;
++    }
++
++  return (onscreen_width != expected_width ||
++          onscreen_height != expected_height);
++}
++
+ CoglFramebuffer *
+ clutter_stage_view_get_framebuffer (ClutterStageView *view)
+ {
+   ClutterStageViewPrivate *priv =
+     clutter_stage_view_get_instance_private (view);
+ 
+-  g_warn_if_fail (priv->ensure_offscreen_idle_id == 0);
++  if (priv->ensure_offscreen_idle_id != 0)
++    {
++      g_clear_handle_id (&priv->ensure_offscreen_idle_id, g_source_remove);
++      ensure_stage_view_offscreen (view);
++      ensure_stage_view_offscreen_pipeline (view);
++    }
+ 
+   if (priv->offscreen)
+     return COGL_FRAMEBUFFER (priv->offscreen);
+@@ -181,8 +224,37 @@
+   g_autoptr (CoglOffscreen) offscreen = NULL;
+   g_autoptr (GError) local_error = NULL;
+ 
++  if (clutter_stage_view_is_scaled_mirror (view))
++    {
++      offscreen_width = MAX (1, (int) roundf (priv->layout.width * priv->scale));
++      offscreen_height = MAX (1, (int) roundf (priv->layout.height * priv->scale));
++    }
++  else
++    {
++      onscreen_width = cogl_framebuffer_get_width (priv->framebuffer);
++      onscreen_height = cogl_framebuffer_get_height (priv->framebuffer);
++
++      if (mtk_monitor_transform_is_rotated (priv->transform))
++        {
++          offscreen_width = onscreen_height;
++          offscreen_height = onscreen_width;
++        }
++      else
++        {
++          offscreen_width = onscreen_width;
++          offscreen_height = onscreen_height;
++        }
++    }
++
+   if (priv->offscreen)
+-    return;
++    {
++      if (cogl_framebuffer_get_width (COGL_FRAMEBUFFER (priv->offscreen)) == offscreen_width &&
++          cogl_framebuffer_get_height (COGL_FRAMEBUFFER (priv->offscreen)) == offscreen_height)
++        return;
++
++      g_clear_object (&priv->offscreen_pipeline);
++      g_clear_object (&priv->offscreen);
++    }
+ 
+   required_format = clutter_color_state_required_format (priv->color_state);
+ 
+@@ -203,20 +275,6 @@
+       formats[n_formats++] = COGL_PIXEL_FORMAT_ABGR_FP_16161616_PRE;
+     }
+ 
+-  onscreen_width = cogl_framebuffer_get_width (priv->framebuffer);
+-  onscreen_height = cogl_framebuffer_get_height (priv->framebuffer);
+-
+-  if (mtk_monitor_transform_is_rotated (priv->transform))
+-    {
+-      offscreen_width = onscreen_height;
+-      offscreen_height = onscreen_width;
+-    }
+-  else
+-    {
+-      offscreen_width = onscreen_width;
+-      offscreen_height = onscreen_height;
+-    }
+-
+   offscreen = cogl_offscreen_new_from_formats (cogl_context,
+                                                formats,
+                                                n_formats,
+@@ -243,9 +301,13 @@
+   pipeline = cogl_pipeline_new (cogl_framebuffer_get_context (framebuffer));
+   cogl_pipeline_set_static_name (pipeline, "ClutterStageView (offscreen)");
+ 
+-  cogl_pipeline_set_layer_filters (pipeline, 0,
+-                                   COGL_PIPELINE_FILTER_NEAREST,
+-                                   COGL_PIPELINE_FILTER_NEAREST);
++  {
++    CoglPipelineFilter filter =
++      clutter_stage_view_is_scaled_mirror (view)
++        ? COGL_PIPELINE_FILTER_LINEAR
++        : COGL_PIPELINE_FILTER_NEAREST;
++    cogl_pipeline_set_layer_filters (pipeline, 0, filter, filter);
++  }
+   cogl_pipeline_set_layer_texture (pipeline, 0,
+                                    cogl_offscreen_get_texture (priv->offscreen));
+   cogl_pipeline_set_layer_wrap_mode (pipeline, 0,
+@@ -294,6 +356,7 @@
+     }
+ 
+   if (priv->transform == MTK_MONITOR_TRANSFORM_NORMAL &&
++      !clutter_stage_view_is_scaled_mirror (view) &&
+       !clutter_color_state_needs_mapping (priv->color_state,
+                                           priv->output_color_state))
+     {
+@@ -426,6 +489,34 @@
+   cogl_framebuffer_set_viewport (dst_framebuffer,
+                                  0, 0, dst_width, dst_height);
+ 
++  if (clutter_stage_view_is_scaled_mirror (view))
++    {
++      float src_width = MAX (1.0f, (float) onscreen_layout.width * view_scale);
++      float src_height = MAX (1.0f, (float) onscreen_layout.height * view_scale);
++      float fit_scale = MIN ((float) dst_width / src_width,
++                             (float) dst_height / src_height);
++      float fitted_w = roundf (src_width * fit_scale);
++      float fitted_h = roundf (src_height * fit_scale);
++      float pad_x = floorf (((float) dst_width - fitted_w) * 0.5f);
++      float pad_y = floorf (((float) dst_height - fitted_h) * 0.5f);
++      float quad[8] = {
++        pad_x, pad_y,
++        pad_x + fitted_w, pad_y + fitted_h,
++        0.0f, 0.0f,
++        1.0f, 1.0f,
++      };
++
++      cogl_framebuffer_clear4f (dst_framebuffer,
++                                COGL_BUFFER_BIT_COLOR,
++                                0.f, 0.f, 0.f, 1.f);
++      cogl_framebuffer_draw_textured_rectangles (dst_framebuffer,
++                                                 pipeline,
++                                                 quad,
++                                                 1);
++      cogl_framebuffer_pop_matrix (dst_framebuffer);
++      return;
++    }
++
+   n_rectangles = mtk_region_num_rectangles (redraw_clip);
+   coordinates = g_newa (float, 2 * 4 * n_rectangles);
+ 
+@@ -1124,6 +1215,9 @@
+     clutter_stage_view_get_instance_private (view);
+   G_GNUC_UNUSED int fb_width, fb_height;
+ 
++  if (clutter_stage_view_is_scaled_mirror (view))
++    return;
++
+   fb_width = cogl_framebuffer_get_width (priv->framebuffer);
+   fb_height = cogl_framebuffer_get_height (priv->framebuffer);
+ 
+@@ -1296,6 +1390,8 @@
+                                                view);
+ 
+   clutter_stage_view_ensure_color_states (view);
++  if (clutter_stage_view_is_scaled_mirror (view))
++    clutter_stage_view_invalidate_offscreen (view);
+ 
+   clutter_stage_view_add_redraw_clip (view, NULL);
+   clutter_stage_view_schedule_update (view);
+diff -urN '--exclude=debian' '--exclude=.pc' mutter-clean/clutter/clutter/clutter-stage-view.h mutter-ubuntu/clutter/clutter/clutter-stage-view.h
+--- mutter-clean/clutter/clutter/clutter-stage-view.h	2026-04-14 21:37:46.000000000 +0800
++++ mutter-ubuntu/clutter/clutter/clutter-stage-view.h	2026-11-23 00:24:29.811578634 +0800
+@@ -78,6 +78,9 @@
+ gboolean clutter_stage_view_has_shadowfb (ClutterStageView *view);
+ 
+ CLUTTER_EXPORT
++gboolean clutter_stage_view_is_scaled_mirror (ClutterStageView *view);
++
++CLUTTER_EXPORT
+ void clutter_stage_view_schedule_update_now (ClutterStageView *view);
+ 
+ CLUTTER_EXPORT
+diff -urN '--exclude=debian' '--exclude=.pc' mutter-clean/src/backends/meta-monitor-config-manager.c mutter-ubuntu/src/backends/meta-monitor-config-manager.c
+--- mutter-clean/src/backends/meta-monitor-config-manager.c	2026-04-14 21:37:46.000000000 +0800
++++ mutter-ubuntu/src/backends/meta-monitor-config-manager.c	2026-11-23 00:21:40.024262413 +0800
+@@ -242,10 +242,22 @@
+       height = crtc_mode_info->height / scale;
+     }
+ 
+-  crtc_layout = GRAPHENE_RECT_INIT (x_offset + (crtc_x / scale),
+-                                    y_offset + (crtc_y / scale),
+-                                    width,
+-                                    height);
++  if (data->config->layout_mode == META_LOGICAL_MONITOR_LAYOUT_MODE_LOGICAL &&
++      g_list_length (data->logical_monitor_config->monitor_configs) > 1 &&
++      g_list_length (meta_monitor_get_outputs (monitor)) == 1)
++    {
++      crtc_layout = GRAPHENE_RECT_INIT (data->logical_monitor_config->layout.x,
++                                        data->logical_monitor_config->layout.y,
++                                        data->logical_monitor_config->layout.width,
++                                        data->logical_monitor_config->layout.height);
++    }
++  else
++    {
++      crtc_layout = GRAPHENE_RECT_INIT (x_offset + (crtc_x / scale),
++                                        y_offset + (crtc_y / scale),
++                                        width,
++                                        height);
++    }
+ 
+   crtc_assignment = g_new0 (MetaCrtcAssignment, 1);
+   *crtc_assignment = (MetaCrtcAssignment) {
+@@ -1825,8 +1837,9 @@
+     {
+       MetaMonitorConfig *monitor_config = l->data;
+ 
+-      if (monitor_config->mode_spec->width != mode_width ||
+-          monitor_config->mode_spec->height != mode_height)
++      if ((monitor_config->mode_spec->width != mode_width ||
++           monitor_config->mode_spec->height != mode_height) &&
++          layout_mode != META_LOGICAL_MONITOR_LAYOUT_MODE_LOGICAL)
+         {
+           g_set_error (error, G_IO_ERROR, G_IO_ERROR_FAILED,
+                        "Monitors modes in logical monitor not equal");
+diff -urN '--exclude=debian' '--exclude=.pc' mutter-clean/src/backends/meta-monitor-manager.c mutter-ubuntu/src/backends/meta-monitor-manager.c
+--- mutter-clean/src/backends/meta-monitor-manager.c	2026-04-14 21:37:46.000000000 +0800
++++ mutter-ubuntu/src/backends/meta-monitor-manager.c	2026-11-23 00:21:40.024995646 +0800
+@@ -1106,7 +1106,8 @@
+   orientation_manager = meta_backend_get_orientation_manager (manager->backend);
+ 
+   panel_orientation_managed =
+-    (clutter_seat_get_touch_mode (seat) &&
++    ((clutter_seat_get_touch_mode (seat) ||
++      clutter_seat_has_touchscreen (seat)) &&
+      meta_orientation_manager_has_accelerometer (orientation_manager) &&
+      meta_monitor_manager_get_builtin_monitor (manager));
+ 
+@@ -2776,6 +2777,23 @@
+       goto err;
+     }
+ 
++  if (g_list_length (monitor_configs) > 1)
++    {
++      GList *l_mc;
++      for (l_mc = monitor_configs; l_mc; l_mc = l_mc->next)
++        {
++          MetaMonitorConfig *mc = l_mc->data;
++          MetaMonitor *mon =
++            meta_monitor_manager_get_monitor_from_spec (manager, mc->monitor_spec);
++          if (mon && meta_monitor_is_builtin (mon))
++            {
++              monitor_configs = g_list_remove_link (monitor_configs, l_mc);
++              monitor_configs = g_list_concat (l_mc, monitor_configs);
++              break;
++            }
++        }
++    }
++
+   first_monitor_config = monitor_configs->data;
+   if (!find_monitor_mode_scale (manager,
+                                 layout_mode,
+@@ -4372,6 +4390,10 @@
+   g_signal_connect_object (seat, "notify::touch-mode",
+                            G_CALLBACK (update_panel_orientation_managed), manager,
+                            G_CONNECT_SWAPPED);
++  g_signal_connect_object (seat, "notify::has-touchscreen",
++                           G_CALLBACK (update_panel_orientation_managed), manager,
++                           G_CONNECT_SWAPPED);
++  update_panel_orientation_managed (manager);
+ }
+ 
+ MetaViewportInfo *
+diff -urN '--exclude=debian' '--exclude=.pc' mutter-clean/src/backends/meta-stage-impl.c mutter-ubuntu/src/backends/meta-stage-impl.c
+--- mutter-clean/src/backends/meta-stage-impl.c	2026-04-14 21:37:46.000000000 +0800
++++ mutter-ubuntu/src/backends/meta-stage-impl.c	2026-11-23 00:21:40.023942186 +0800
+@@ -546,6 +546,8 @@
+                                paint_debug_flags,
+                                onscreen,
+                                stage_window);
++  if (clutter_stage_view_is_scaled_mirror (stage_view))
++    use_clipped_redraw = FALSE;
+ 
+   if (use_clipped_redraw)
+     {
+diff -urN '--exclude=debian' '--exclude=.pc' mutter-clean/src/backends/native/meta-cursor-renderer-native.c mutter-ubuntu/src/backends/native/meta-cursor-renderer-native.c
+--- mutter-clean/src/backends/native/meta-cursor-renderer-native.c	2026-04-14 21:37:46.000000000 +0800
++++ mutter-ubuntu/src/backends/native/meta-cursor-renderer-native.c	2026-11-23 00:21:40.024114767 +0800
+@@ -411,6 +411,7 @@
+       g_assert (cursor_stage_view);
+ 
+       if (!META_IS_CRTC_KMS (crtc) ||
++          clutter_stage_view_is_scaled_mirror (CLUTTER_STAGE_VIEW (view)) ||
+           !is_hw_cursor_available_for_gpu (META_GPU_KMS (gpu)) ||
+           !meta_crtc_native_is_hw_cursor_supported (crtc_native))
+         {
+diff -urN '--exclude=debian' '--exclude=.pc' mutter-clean/src/compositor/meta-compositor-view-native.c mutter-ubuntu/src/compositor/meta-compositor-view-native.c
+--- mutter-clean/src/compositor/meta-compositor-view-native.c	2026-04-14 21:37:46.000000000 +0800
++++ mutter-ubuntu/src/compositor/meta-compositor-view-native.c	2026-11-23 00:21:40.024015189 +0800
+@@ -289,6 +289,13 @@
+       return FALSE;
+     }
+ 
++  if (clutter_stage_view_is_scaled_mirror (stage_view))
++    {
++      meta_topic (META_DEBUG_RENDER,
++                  "No direct scanout candidate: stage-view uses scaled mirror");
++      return FALSE;
++    }
++
+   if (clutter_stage_view_has_shadowfb (stage_view))
+     {
+       meta_topic (META_DEBUG_RENDER,

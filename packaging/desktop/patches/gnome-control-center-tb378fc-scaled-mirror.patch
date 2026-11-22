@@ -1,0 +1,182 @@
+diff --git a/panels/display/cc-display-config.c b/panels/display/cc-display-config.c
+index 0da3201..fcb80f5 100644
+--- a/panels/display/cc-display-config.c
++++ b/panels/display/cc-display-config.c
+@@ -762,7 +762,18 @@ logical_monitor_width (CcDisplayLogicalMonitor *lm)
+   int width;
+ 
+   g_hash_table_iter_init (&iter, lm->monitors);
+-  g_hash_table_iter_next (&iter, (void **) &monitor, NULL);
++  if (g_hash_table_iter_next (&iter, (void **) &monitor, NULL))
++    {
++      CcDisplayMonitor *cand;
++      while (g_hash_table_iter_next (&iter, (void **) &cand, NULL))
++        {
++          if (cc_display_monitor_is_builtin (cand))
++            {
++              monitor = cand;
++              break;
++            }
++        }
++    }
+   mode = CC_DISPLAY_MODE (monitor->current_mode);
+   if (logical_monitor_is_rotated (lm))
+     width = mode ? mode->height : 0;
+@@ -1100,7 +1111,18 @@ cc_display_monitor_set_compatible_clone_mode (CcDisplayMonitor *self,
+         best_mode = mode;
+     }
+ 
+-  g_return_if_fail (best_mode);
++  if (!best_mode)
++    {
++      /* Heterogeneous scaled mirror: drive external display at its own native
++       * preferred mode while preserving the logical desktop scale. */
++      best_mode = self->preferred_mode;
++      if (!best_mode && self->modes)
++        best_mode = CC_DISPLAY_MODE (self->modes->data);
++      g_return_if_fail (best_mode);
++      self->current_mode = best_mode;
++      g_signal_emit_by_name (self, "mode");
++      return;
++    }
+ 
+   cc_display_monitor_set_mode (CC_DISPLAY_MONITOR (self), best_mode);
+ }
+@@ -1160,7 +1182,8 @@ cc_display_monitor_set_scale (CcDisplayMonitor *self,
+   if (!self->current_mode)
+     return;
+ 
+-  if (!cc_display_mode_is_supported_scale (self->current_mode, scale))
++  if (!cc_display_config_is_cloning (self->config) &&
++      !cc_display_mode_is_supported_scale (self->current_mode, scale))
+     return;
+ 
+   if (!self->logical_monitor)
+@@ -1893,10 +1916,21 @@ build_monitors_variant (GHashTable *monitors)
+   GHashTableIter iter;
+   CcDisplayMonitor *monitor;
+ 
++  g_autoptr(GList) ordered_monitors = NULL;
++  GList *l_mon;
++
+   g_variant_builder_init (&builder, G_VARIANT_TYPE_ARRAY);
+   g_hash_table_iter_init (&iter, monitors);
+-
+   while (g_hash_table_iter_next (&iter, (void **) &monitor, NULL))
++    {
++      if (cc_display_monitor_is_builtin (monitor))
++        ordered_monitors = g_list_prepend (ordered_monitors, monitor);
++      else
++        ordered_monitors = g_list_append (ordered_monitors, monitor);
++    }
++
++  for (l_mon = ordered_monitors; l_mon != NULL; l_mon = l_mon->next)
++    if ((monitor = l_mon->data) != NULL)
+     {
+       GVariantBuilder props_builder;
+       CcDisplayMode *mode;
+@@ -2334,6 +2368,52 @@ cc_display_config_generate_cloning_modes (CcDisplayConfig *self)
+         best_mode = virtual_mode;
+     }
+ 
++  if (!clone_modes)
++    {
++      for (l = self->monitors; l; l = l->next)
++        {
++          CcDisplayMonitor *monitor = l->data;
++          if (cc_display_monitor_is_active (monitor) &&
++              cc_display_monitor_is_builtin (monitor))
++            {
++              base_monitor = monitor;
++              break;
++            }
++        }
++
++      for (l = base_monitor->modes; l; l = l->next)
++        {
++          CcDisplayMode *mode = l->data;
++          CcDisplayMode *virtual_mode;
++          g_autoptr (GArray) supported_scales = NULL;
++          GList *cm;
++          gboolean duplicate = FALSE;
++
++          for (cm = clone_modes; cm; cm = cm->next)
++            {
++              CcDisplayMode *existing = cm->data;
++              if (existing->width == mode->width && existing->height == mode->height)
++                {
++                  duplicate = TRUE;
++                  break;
++                }
++            }
++          if (duplicate)
++            continue;
++
++          supported_scales =
++            cc_display_mode_get_supported_scales (CC_DISPLAY_MODE (mode));
++          virtual_mode = cc_display_mode_new_virtual (mode->width,
++                                                      mode->height,
++                                                      mode->preferred_scale,
++                                                      supported_scales);
++          clone_modes = g_list_append (clone_modes, virtual_mode);
++
++          if (!best_mode || is_mode_better (virtual_mode, best_mode))
++            best_mode = virtual_mode;
++        }
++    }
++
+   if (best_mode)
+     best_mode->flags |= MODE_PREFERRED;
+ 
+diff --git a/panels/display/cc-display-panel.c b/panels/display/cc-display-panel.c
+index c102432..5f293e5 100644
+--- a/panels/display/cc-display-panel.c
++++ b/panels/display/cc-display-panel.c
+@@ -816,7 +816,18 @@ rebuild_ui (CcDisplayPanel *self)
+       gtk_widget_set_visible (self->arrangement_row, type == CC_DISPLAY_CONFIG_JOIN);
+ 
+       if (type == CC_DISPLAY_CONFIG_CLONE)
+-        move_display_settings_to_main_page (self);
++        {
++          for (l = outputs; l; l = l->next)
++            {
++              if (cc_display_monitor_is_active (l->data) &&
++                  cc_display_monitor_is_builtin (l->data))
++                {
++                  set_current_output (self, l->data, TRUE);
++                  break;
++                }
++            }
++          move_display_settings_to_main_page (self);
++        }
+       else
+         move_display_settings_to_separate_page (self);
+     }
+diff --git a/panels/display/cc-display-settings.c b/panels/display/cc-display-settings.c
+index 975c51a..33f15a6 100644
+--- a/panels/display/cc-display-settings.c
++++ b/panels/display/cc-display-settings.c
+@@ -412,8 +412,21 @@ cc_display_settings_rebuild_ui (CcDisplaySettings *self)
+     current_mode = cc_display_monitor_get_preferred_mode (self->selected_output);
+   if (current_mode == NULL) {
+     modes = cc_display_monitor_get_modes (self->selected_output);
+-    /* Lets assume that a monitor always has at least one mode. */
+-    g_assert (modes);
++    if (!modes)
++      {
++        g_object_thaw_notify ((GObject*) self->enabled_row);
++        g_object_thaw_notify ((GObject*) self->orientation_row);
++        g_object_thaw_notify ((GObject*) self->refresh_rate_row);
++        g_object_thaw_notify ((GObject*) self->refresh_rate_expander_row);
++        g_object_thaw_notify ((GObject*) self->variable_refresh_rate_row);
++        g_object_thaw_notify ((GObject*) self->preferred_refresh_rate_row);
++        g_object_thaw_notify ((GObject*) self->resolution_row);
++        g_object_thaw_notify ((GObject*) self->scale_combo_row);
++        g_object_thaw_notify ((GObject*) self->hdr_row);
++        g_object_thaw_notify ((GObject*) self->underscanning_row);
++        g_object_thaw_notify ((GObject*) self->scale_toggle_group);
++        return G_SOURCE_REMOVE;
++      }
+     current_mode = CC_DISPLAY_MODE (modes->data);
+   }
+ 

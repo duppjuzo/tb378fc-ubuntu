@@ -1,7 +1,7 @@
 [Unit]
 Description=Rotate stereo/quad output across Lenovo TB378FC's four speakers
 After=pipewire.service wireplumber.service
-PartOf=graphical-session.target
+PartOf=graphical-session.target pipewire.service
 
 [Service]
 Type=simple
@@ -10,4 +10,4 @@ Restart=on-failure
 RestartSec=2
 
 [Install]
-WantedBy=graphical-session.target
+WantedBy=graphical-session.target pipewire.service
