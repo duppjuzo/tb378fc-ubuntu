@@ -1,0 +1,35 @@
+From 306e3549b707bfe94d8fdfbff5ec0e9e8e33479c Mon Sep 17 00:00:00 2001
+From: TB378FC Maintainer <maintainer@tb378fc.local>
+Date: Sun, 22 Nov 2026 21:37:35 +0800
+Subject: [PATCH] arm64: dts: qcom: tb378fc: fix camera rotation and adsp
+ fastrpc
+
+Set native 0-degree landscape rotation on OV13B10/GC08A8 and mark the
+ADSP FastRPC domain non-secure so /dev/fastrpc-adsp is exposed directly
+for hexagonrpcd and Qualcomm SSC sensor services.
+
+Signed-off-by: TB378FC Maintainer <maintainer@tb378fc.local>
+---
+ arch/arm64/boot/dts/qcom/sm8750-lenovo-tb378fc.dts | 6 ++++++
+ 1 file changed, 6 insertions(+)
+
+diff --git a/arch/arm64/boot/dts/qcom/sm8750-lenovo-tb378fc.dts b/arch/arm64/boot/dts/qcom/sm8750-lenovo-tb378fc.dts
+index 57cc49a17da..02e10a131fd 100644
+--- a/arch/arm64/boot/dts/qcom/sm8750-lenovo-tb378fc.dts
++++ b/arch/arm64/boot/dts/qcom/sm8750-lenovo-tb378fc.dts
+@@ -1532,6 +1532,12 @@ &remoteproc_adsp {
+ 	firmware-name = "qcom/sm8750/tb378fc/adsp.mdt",
+ 			"qcom/sm8750/tb378fc/adsp_dtb.mdt";
+ 	status = "okay";
++
++	glink-edge {
++		fastrpc {
++			qcom,non-secure-domain;
++		};
++	};
+ };
+ 
+ &swr1 {
+-- 
+2.43.0
+

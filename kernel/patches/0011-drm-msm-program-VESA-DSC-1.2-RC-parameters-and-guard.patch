@@ -1,0 +1,95 @@
+From ed017f494d641ebaeaf061ee6cd09d29ba12021c Mon Sep 17 00:00:00 2001
+From: TB378FC Maintainer <maintainer@tb378fc.local>
+Date: Sun, 22 Nov 2026 19:51:40 +0800
+Subject: [PATCH] drm/msm: program VESA DSC 1.2 RC parameters and guard
+ inactive merge_3d flush
+
+1. Populate DSC 1.2 4:4:4/4:2:2/4:2:0 RC tables and VESA DSC 1.2
+   slice-height-dependent first_line_bpg_offset (13 for slice_height=30,
+   yielding nfl_bpg_offset=0x0397, scale_increment_interval=0x0368, and
+   initial_dec_delay=0x02db) in both dsi_populate_dsc_params() and
+   novatek_nt36526_prepare() to match the CSOT NT36526 DDIC 0x91 decoder
+   configuration and eliminate 876x30 DSC slice bitstream desync.
+2. Only flush CTL_MERGE_3D_FLUSH during dpu_encoder_phys_cleanup() when
+   3D blend was active on the encoder.
+
+Signed-off-by: TB378FC Maintainer <maintainer@tb378fc.local>
+---
+ drivers/gpu/drm/msm/disp/dpu1/dpu_encoder.c   |  5 ++--
+ drivers/gpu/drm/msm/dsi/dsi_host.c            | 23 +++++++++++++++++--
+ drivers/gpu/drm/panel/panel-novatek-nt36526.c |  9 ++++++++
+ 3 files changed, 33 insertions(+), 4 deletions(-)
+
+diff --git a/drivers/gpu/drm/msm/disp/dpu1/dpu_encoder.c b/drivers/gpu/drm/msm/disp/dpu1/dpu_encoder.c
+index c153603c903..1a7cadc7d6c 100644
+--- a/drivers/gpu/drm/msm/disp/dpu1/dpu_encoder.c
++++ b/drivers/gpu/drm/msm/disp/dpu1/dpu_encoder.c
+@@ -2386,8 +2386,9 @@ static void dpu_encoder_phys_cleanup(struct dpu_encoder_phys *phys_enc)
+ 	if (dpu_enc->cwb_mask)
+ 		dpu_encoder_helper_phys_setup_cwb(phys_enc, false);
+ 
+-	/* reset the merge 3D HW block */
+-	if (phys_enc->hw_pp && phys_enc->hw_pp->merge_3d) {
++	/* reset the merge 3D HW block only when 3D blend was active */
++	if (dpu_encoder_helper_get_3d_blend_mode(phys_enc) &&
++	    phys_enc->hw_pp && phys_enc->hw_pp->merge_3d) {
+ 		phys_enc->hw_pp->merge_3d->ops.setup_3d_mode(phys_enc->hw_pp->merge_3d,
+ 				BLEND_3D_NONE);
+ 		if (ctl->ops.update_pending_flush_merge_3d)
+diff --git a/drivers/gpu/drm/msm/dsi/dsi_host.c b/drivers/gpu/drm/msm/dsi/dsi_host.c
+index 437341a12a9..cdab9d99d92 100644
+--- a/drivers/gpu/drm/msm/dsi/dsi_host.c
++++ b/drivers/gpu/drm/msm/dsi/dsi_host.c
+@@ -1947,8 +1947,27 @@ static int dsi_populate_dsc_params(struct msm_dsi_host *msm_host, struct drm_dsc
+ 	drm_dsc_set_const_params(dsc);
+ 	drm_dsc_set_rc_buf_thresh(dsc);
+ 
+-	/* DPU supports only pre-SCR panels */
+-	ret = drm_dsc_setup_rc_params(dsc, DRM_DSC_1_1_PRE_SCR);
++	if (dsc->dsc_version_minor == 0x2) {
++		enum drm_dsc_params_type type = DRM_DSC_1_2_444;
++
++		if (dsc->native_420)
++			type = DRM_DSC_1_2_420;
++		else if (dsc->native_422)
++			type = DRM_DSC_1_2_422;
++
++		ret = drm_dsc_setup_rc_params(dsc, type);
++		if (!ret && dsc->slice_height >= 8) {
++			int fl_bpg = 12 + (9 * min_t(int, 34, dsc->slice_height - 8)) / 100;
++			int max_fl = 3 * ((3 * dsc->bits_per_component +
++					   (dsc->convert_rgb ? 2 : 0)) -
++					  drm_dsc_get_bpp_int(dsc));
++
++			dsc->first_line_bpg_offset = clamp(fl_bpg, 0, max_fl);
++		}
++	} else {
++		/* DSC 1.1 pre-SCR panels */
++		ret = drm_dsc_setup_rc_params(dsc, DRM_DSC_1_1_PRE_SCR);
++	}
+ 	if (ret) {
+ 		DRM_DEV_ERROR(&msm_host->pdev->dev, "could not find DSC RC parameters\n");
+ 		return ret;
+diff --git a/drivers/gpu/drm/panel/panel-novatek-nt36526.c b/drivers/gpu/drm/panel/panel-novatek-nt36526.c
+index cd479294540..a8d75cac646 100644
+--- a/drivers/gpu/drm/panel/panel-novatek-nt36526.c
++++ b/drivers/gpu/drm/panel/panel-novatek-nt36526.c
+@@ -189,6 +189,15 @@ static int novatek_nt36526_prepare(struct drm_panel *panel)
+ 	struct novatek_nt36526 *ctx = to_novatek_nt36526(panel);
+ 	int ret;
+ 
++	ret = drm_dsc_setup_rc_params(&ctx->dsc, DRM_DSC_1_2_444);
++	if (ret)
++		return ret;
++	ctx->dsc.first_line_bpg_offset = 13;
++	ctx->dsc.initial_scale_value = drm_dsc_initial_scale_value(&ctx->dsc);
++	ret = drm_dsc_compute_rc_parameters(&ctx->dsc);
++	if (ret)
++		return ret;
++
+ 	ret = novatek_nt36526_power_on(ctx);
+ 	if (ret < 0)
+ 		return ret;
+-- 
+2.43.0
+

@@ -48,7 +48,7 @@ stage=$(mktemp -d)
 trap 'rm -rf "$stage"' EXIT
 
 applets=(
-	sh ash cat chmod chown cp cut date dd df dmesg echo env expr find findfs
+	sh ash cat chmod chown chroot cp cut date dd df dmesg echo env expr find findfs
 	grep head httpd id ifconfig ip kill ln losetup ls mkdir mknod mount mv
 	pidof poweroff printf ps pwd readlink reboot rm rmdir sed seq setsid
 	sleep sort stat stty switch_root sync tail tee test touch tr true false

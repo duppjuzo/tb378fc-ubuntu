@@ -123,9 +123,141 @@ else
 fi
 
 [ -r /etc/build-id ] && cp /etc/build-id /newroot/etc/tb378fc-build-id
+
+# Ensure private Mesa 26.2.6 (Adreno 830 explicit-sync + Turnip) overrides unpatched system Mesa
+# even for AT_SECURE/cap_sys_nice binaries like gnome-shell and GDM initial-setup.
+if [ -d /newroot/usr/lib/tb378fc/mesa/lib ]; then
+    mkdir -p /newroot/etc/ld.so.conf.d /newroot/etc/glvnd/egl_vendor.d /newroot/etc/vulkan/icd.d
+    need_ldconfig=0
+    if [ ! -f /newroot/etc/ld.so.conf.d/00-tb378fc-mesa.conf ]; then
+        printf '%s\n' '/usr/lib/tb378fc/mesa/lib' >/newroot/etc/ld.so.conf.d/00-tb378fc-mesa.conf
+        need_ldconfig=1
+    fi
+    cat >/newroot/etc/glvnd/egl_vendor.d/10_tb378fc_mesa.json <<'EOF'
+{
+    "file_format_version" : "1.0.0",
+    "ICD" : {
+        "library_path" : "/usr/lib/tb378fc/mesa/lib/libEGL_mesa.so.0"
+    }
+}
+EOF
+    cat >/newroot/etc/vulkan/icd.d/10_tb378fc_freedreno.json <<'EOF'
+{
+    "file_format_version": "1.0.1",
+    "ICD": {
+        "library_path": "/usr/lib/tb378fc/mesa/lib/libvulkan_freedreno.so",
+        "api_version": "1.4.335"
+    }
+}
+EOF
+    if [ "$need_ldconfig" = "1" ] || [ ! -s /newroot/etc/ld.so.cache ]; then
+        chroot /newroot /sbin/ldconfig 2>/dev/null || /newroot/sbin/ldconfig.real -r /newroot 2>/dev/null || true
+    fi
+fi
+
+if [ "$debug" = "1" ]; then
+    mkdir -p /run/systemd/system/multi-user.target.wants \
+             /run/systemd/system/getty.target.wants \
+             /run/systemd/system/serial-getty@ttyGS0.service.d \
+             /run/systemd/system/ssh.service.d \
+             /run/tb378fc-diag/cgi-bin
+
+    # 1. ttyGS0 (USB ACM COM port) autologin root serial shell
+    cat >/run/systemd/system/serial-getty@ttyGS0.service.d/tb378fc-debug.conf <<'EOF'
+[Service]
+ExecStart=
+ExecStart=-/sbin/agetty --autologin root --noclear --noissue -L ttyGS0 115200 vt100
+EOF
+    ln -sf /usr/lib/systemd/system/serial-getty@.service /run/systemd/system/getty.target.wants/serial-getty@ttyGS0.service
+
+    # 2. Ephemeral USB SSH root key auth (nothing written to persistent rootfs!)
+    cat >/run/tb378fc-diag/authorized_keys <<'EOF'
+ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIBGu+jfcayd3otcwvpVyWmQZoouj6yuoGVLX8BxCFyF6 tb378fc-usb-diag
+EOF
+    chmod 0600 /run/tb378fc-diag/authorized_keys
+    cat >/run/systemd/system/ssh.service.d/tb378fc-debug.conf <<'EOF'
+[Service]
+ExecStart=
+ExecStart=/usr/sbin/sshd -D -o PermitRootLogin=prohibit-password -o PubkeyAuthentication=yes -o AuthorizedKeysFile=/run/tb378fc-diag/authorized_keys
+EOF
+
+    # 3. HTTP health, wb-capture, and root diagnostic exec endpoints (bound on USB NCM)
+    cat >/run/tb378fc-diag/cgi-bin/health <<'EOF'
+#!/bin/sh
+echo "Content-Type: text/plain"
+echo ""
+echo "=== UNAME & TAINTED ==="
+uname -a
+echo "tainted=$(cat /proc/sys/kernel/tainted)"
+echo "=== DF ROOT ==="
+df -h /
+echo "=== GNOME-SHELL MESA MAPS ==="
+pid=$(pidof gnome-shell | awk '{print $1}')
+echo "gnome-shell pid=$pid"
+if [ -n "$pid" ] && [ -r "/proc/$pid/maps" ]; then
+    grep -E "mesa|gallium|gbm|vulkan|dri" "/proc/$pid/maps" | awk '{print $6}' | sort -u
+fi
+echo "=== FB-READ METADATA ==="
+/run/initramfs/bin/fb-read 2>&1 || true
+echo "=== DRM & BACKLIGHT ==="
+for s in /sys/class/drm/*/status /sys/class/drm/*/modes; do
+    [ -e "$s" ] && { echo "--- $s ---"; head -n 8 "$s"; }
+done
+ls -la /sys/class/backlight/ 2>&1
+echo "=== SOUND CARDS ==="
+cat /proc/asound/cards 2>&1
+echo "=== WIFI / BT / SENSORS / CAM ==="
+ip -br link
+systemctl is-active bluetooth NetworkManager iio-sensor-proxy tb378fc-sensord 2>&1 || true
+echo "=== DMESG ERRORS ==="
+dmesg | grep -iE "adreno|dpu|ubwc|dsi|aw88480|wcd939x|ath12k|bluetooth|camss|ov13b10|gc08a8|error|fail" | tail -n 60
+EOF
+    chmod 0755 /run/tb378fc-diag/cgi-bin/health
+
+    cat >/run/tb378fc-diag/cgi-bin/exec <<'EOF'
+#!/bin/sh
+echo "Content-Type: text/plain"
+echo ""
+cmd=$(cat)
+if [ -z "$cmd" ]; then
+    echo "EMPTY_CMD"
+    exit 0
+fi
+eval "$cmd" 2>&1
+echo ""
+echo "EXIT_CODE=$?"
+EOF
+    chmod 0755 /run/tb378fc-diag/cgi-bin/exec
+
+    cat >/run/tb378fc-diag/cgi-bin/reboot-fastboot <<'EOF'
+#!/bin/sh
+echo "Content-Type: text/plain"
+echo ""
+echo "REBOOTING_TO_FASTBOOT"
+( sleep 1; /run/initramfs/bin/reboot-bootloader ) >/dev/null 2>&1 &
+EOF
+    chmod 0755 /run/tb378fc-diag/cgi-bin/reboot-fastboot
+
+    cat >/run/systemd/system/tb378fc-usb-diag-http.service <<'EOF'
+[Unit]
+Description=TB378FC opt-in debug USB NCM & HTTP endpoint
+After=network-pre.target
+
+[Service]
+Type=simple
+ExecStartPre=/bin/sh -c 'for i in usb0 ncm0 eth0; do if [ -d "/sys/class/net/$i" ]; then ip link set "$i" up; ip addr add 169.254.77.2/16 dev "$i" 2>/dev/null || true; ip addr add 192.168.77.2/24 dev "$i" 2>/dev/null || true; fi; done'
+ExecStart=/run/initramfs/bin/busybox httpd -f -p 8081 -h /run/tb378fc-diag
+Restart=always
+EOF
+    ln -sf ../tb378fc-usb-diag-http.service /run/systemd/system/multi-user.target.wants/tb378fc-usb-diag-http.service
+fi
+
 mkdir -p /run/initramfs/bin /run/initramfs/dev /run/initramfs/proc /run/initramfs/sys /run/initramfs/run
 if [ -x /bin/busybox ]; then
     cp /bin/busybox /run/initramfs/bin/busybox
+    for tool in reboot-bootloader wb-capture fb-read kms-test; do
+        [ -x "/bin/$tool" ] && cp "/bin/$tool" "/run/initramfs/bin/$tool"
+    done
     for app in sh mount umount sync losetup reboot poweroff halt sleep; do
         ln -sf busybox "/run/initramfs/bin/$app"
     done

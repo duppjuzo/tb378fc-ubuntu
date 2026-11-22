@@ -151,6 +151,30 @@ args+=("LOCALVERSION=$localversion")
 echo "Building TB378FC kernel $head ($localversion) with $toolchain ($jobs jobs, waydroid=$with_waydroid)..."
 make "${args[@]}" -j"$jobs" Image qcom/sm8750-lenovo-tb378fc.dtb modules 2>&1 | tee "$out/build.log"
 
+v4l2_src=${V4L2LOOPBACK_SRC:-}
+if [[ -z $v4l2_src ]]; then
+	for cand in "$repo/cache/v4l2loopback" "/root/tb378fc-work/out/v4l2loopback-build"; do
+		if [[ -f "$cand/v4l2loopback.c" ]]; then
+			v4l2_src=$cand
+			break
+		fi
+	done
+fi
+rm -rf "$out/extra-modules"
+if [[ -n $v4l2_src && -f "$v4l2_src/v4l2loopback.c" ]]; then
+	echo "Building matched out-of-tree v4l2loopback.ko from $v4l2_src..."
+	make "${args[@]}" M="$v4l2_src" clean >/dev/null 2>&1 || true
+	make "${args[@]}" M="$v4l2_src" -j"$jobs" modules 2>&1 | tee -a "$out/build.log"
+	krel_built=$(cat "$out/include/config/kernel.release")
+	vmagic=$(modinfo -F vermagic "$v4l2_src/v4l2loopback.ko" 2>/dev/null || true)
+	[[ $vmagic == "$krel_built "* ]] || {
+		echo "v4l2loopback.ko vermagic mismatch: got '$vmagic', expected prefix '$krel_built '" >&2
+		exit 1
+	}
+	mkdir -p "$out/extra-modules"
+	cp "$v4l2_src/v4l2loopback.ko" "$out/extra-modules/v4l2loopback.ko"
+fi
+
 [[ $(git -C "$src" rev-parse HEAD) == "$head" && -z $(git -C "$src" status --porcelain --untracked-files=no) ]] || {
 	echo "Kernel source changed during build; output must not be used." >&2
 	exit 1
@@ -190,6 +214,10 @@ result = {
     "files": {f: sha(out / f) for f in files},
     "module_count": len(modules),
     "modules": modules,
+    "extra_modules": {
+        f"updates/{p.name}": sha(p)
+        for p in sorted((out / "extra-modules").glob("*.ko"))
+    } if (out / "extra-modules").is_dir() else {},
     "module_metadata": {
         name: sha(out / name)
         for name in (

@@ -27,7 +27,7 @@ import subprocess
 import sys
 
 ROOT = Path(__file__).resolve().parent.parent
-CMDLINE = "rdinit=/init panic=15 mem_sleep_default=s2idle loglevel=4"
+CMDLINE = "rdinit=/init panic=15 mem_sleep_default=s2idle loglevel=4 tb378fc.stage=1"
 DEBUG_CMDLINE = "tb378fc.debug=1 log_buf_len=2M printk.time=1"
 
 # Verified TB378FC partition capacities (bytes)

@@ -1,0 +1,46 @@
+From 6ad28c25d148bc0833adf12af061c22cd7361ee8 Mon Sep 17 00:00:00 2001
+From: TB378FC Maintainer <maintainer@tb378fc.local>
+Date: Mon, 23 Nov 2026 00:07:35 +0800
+Subject: [PATCH] arm64: dts: qcom: tb378fc: add USB-C DisplayPort0 audio DAI
+ link
+
+Wire DISPLAY_PORT_RX_0 on q6apmbedai to mdss_dp0 so external USB-C
+DisplayPort/HDMI monitors receive S24_LE digital audio playback and expose
+DP0 Jack detection to ALSA UCM2 / PipeWire.
+
+Signed-off-by: TB378FC Maintainer <maintainer@tb378fc.local>
+---
+ .../boot/dts/qcom/sm8750-lenovo-tb378fc.dts     | 17 +++++++++++++++++
+ 1 file changed, 17 insertions(+)
+
+diff --git a/arch/arm64/boot/dts/qcom/sm8750-lenovo-tb378fc.dts b/arch/arm64/boot/dts/qcom/sm8750-lenovo-tb378fc.dts
+index 02e10a131fd..a0c47afee2b 100644
+--- a/arch/arm64/boot/dts/qcom/sm8750-lenovo-tb378fc.dts
++++ b/arch/arm64/boot/dts/qcom/sm8750-lenovo-tb378fc.dts
+@@ -302,6 +302,23 @@ sound {
+ 		pinctrl-names = "default";
+ 		pinctrl-0 = <&tb378fc_sec_tdm>;
+ 
++		displayport-0-dai-link {
++			link-name = "DisplayPort0 Playback";
++			convert-sample-format = "s24_le";
++
++			cpu {
++				sound-dai = <&q6apmbedai DISPLAY_PORT_RX_0>;
++			};
++
++			codec {
++				sound-dai = <&mdss_dp0>;
++			};
++
++			platform {
++				sound-dai = <&q6apm>;
++			};
++		};
++
+ 		wcd-capture-dai-link {
+ 			link-name = "WCD Capture";
+ 			convert-rate = <48000>;
+-- 
+2.43.0
+
