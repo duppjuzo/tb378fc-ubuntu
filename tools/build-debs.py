@@ -103,6 +103,12 @@ def build_device_support(version: str, out_dir: Path) -> Path:
             "set -eu\n"
             'if [ "$1" = "configure" ]; then\n'
             "    rm -f /etc/udev/rules.d/82-tb378fc-dmaheap75.rules || true\n"
+            "    if command -v glib-compile-schemas >/dev/null 2>&1 && [ -d /usr/share/glib-2.0/schemas ]; then\n"
+            "        glib-compile-schemas /usr/share/glib-2.0/schemas >/dev/null 2>&1 || true\n"
+            "    fi\n"
+            "    if [ -x /usr/share/gdm/generate-config ]; then\n"
+            "        /usr/share/gdm/generate-config >/dev/null 2>&1 || true\n"
+            "    fi\n"
             "    if command -v usermod >/dev/null 2>&1; then\n"
             "        awk -F: '$3 >= 1000 && $3 < 60000 && $7 !~ /(nologin|false)$/ { print $1 }' /etc/passwd | while IFS= read -r u; do\n"
             '            [ -n "$u" ] && usermod -aG video,render "$u" 2>/dev/null || true\n'

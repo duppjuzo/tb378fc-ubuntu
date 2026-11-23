@@ -4,6 +4,7 @@
 set -eu
 gsettings set org.gnome.desktop.session idle-delay 'uint32 0'
 gsettings set org.gnome.desktop.screensaver lock-enabled false
+gsettings set org.gnome.settings-daemon.plugins.power ambient-enabled false
 gsettings set org.gnome.settings-daemon.peripherals.touchscreen orientation-lock false
 systemctl --user start pipewire.service pipewire-pulse.service wireplumber.service
 for _ in $(seq 1 30); do

@@ -351,5 +351,21 @@ class TestUfsMemoryOomdAndSecurityCenter(unittest.TestCase):
             side_conf = out_zip.with_suffix('.device.conf').read_text(encoding='utf-8')
             self.assertIn('TB378FC_SLOT=_b', side_conf)
 
+
+    def test_backlight_persistence_and_als_hysteresis(self):
+        gs = (ROOT / 'packaging/device-support/tree/usr/share/glib-2.0/schemas/90_tb378fc-power.gschema.override').read_text(encoding='utf-8')
+        self.assertIn('[org.gnome.settings-daemon.plugins.power]', gs)
+        self.assertIn('ambient-enabled = false', gs)
+        gdm_cfg = (ROOT / 'packaging/device-support/tree/usr/share/gdm/dconf/90-tb378fc-greeter').read_text(encoding='utf-8')
+        self.assertIn('ambient-enabled=false', gdm_cfg)
+        self.assertIn('idle-dim=false', gdm_cfg)
+        gdm_lck = (ROOT / 'packaging/device-support/tree/usr/share/gdm/dconf/locks/90-tb378fc-greeter-locks').read_text(encoding='utf-8')
+        self.assertIn('/org/gnome/settings-daemon/plugins/power/ambient-enabled', gdm_lck)
+        bdebs = (ROOT / 'tools/build-debs.py').read_text(encoding='utf-8')
+        self.assertIn('glib-compile-schemas', bdebs)
+        self.assertIn('/usr/share/gdm/generate-config', bdebs)
+        sens = (ROOT / 'packaging/sensors/tb378fc-sensord.c').read_text(encoding='utf-8')
+        self.assertIn('fmax(2.0, stream->self->light * 0.08)', sens)
+
 if __name__ == '__main__':
     unittest.main()

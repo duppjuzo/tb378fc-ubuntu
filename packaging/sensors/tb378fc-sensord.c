@@ -474,7 +474,8 @@ static void read_stream_cb(GObject *source, GAsyncResult *res, gpointer user_dat
 			gdouble value = g_ascii_strtod(p, NULL);
 			if (value >= 0.0) {
 				set_has_light(stream->self, TRUE);
-				if (fabs(value - stream->self->light) >= 0.05 || stream->self->light == 0.0) {
+				gdouble threshold = fmax(2.0, stream->self->light * 0.08);
+				if (fabs(value - stream->self->light) >= threshold || stream->self->light == 0.0) {
 					stream->self->light = value;
 					emit_property(stream->self, "LightLevel",
 						      g_variant_new_double(value));

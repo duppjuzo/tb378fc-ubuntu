@@ -1,0 +1,6 @@
+# Disable automatic ALS brightness by default on TB378FC so user-selected
+# brightness persisted by systemd-backlight is never ratcheted to 100% across
+# GDM -> user login transitions. Users may still enable Automatic Screen
+# Brightness manually in GNOME Settings -> Power.
+[org.gnome.settings-daemon.plugins.power]
+ambient-enabled = false
