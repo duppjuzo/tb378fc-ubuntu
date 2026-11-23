@@ -114,11 +114,11 @@ class TestFlashBundleAndAvb(unittest.TestCase):
             self.assertEqual(info["rollback_index"], 1749081600)
             self.assertEqual(info["algorithm_type"], 2)
 
-            # If upstream avbtool.py is available in WSL cache, run full cryptographic verify_image!
-            avbtool = Path("/root/tb378fc-work/cache/tools/avbtool.py")
-            if avbtool.is_file():
+            # If upstream avbtool is configured via $AVBTOOL or on PATH, run full verify_image!
+            avbtool_env = shutil.which("avbtool") or shutil.which("avbtool.py")
+            if avbtool_env:
                 out = subprocess.check_output(
-                    ["python3", str(avbtool), "verify_image", "--image", str(signed_path)],
+                    ["python3", avbtool_env, "verify_image", "--image", str(signed_path)],
                     text=True,
                 )
                 self.assertIn("Verifying image", out)
