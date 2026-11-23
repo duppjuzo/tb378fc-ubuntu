@@ -1,52 +1,61 @@
 # Ubuntu for Lenovo Xiaoxin Pad Pro GT 13 (TB378FC)
 
-在联想小新 Pad Pro GT 13（**TB378FC / `zhiyu` / Snapdragon 8 Elite / SM8750P**）上运行 **Ubuntu Desktop 26.04 LTS (`resolute`)**，基于统一主线 **Linux 7.4 (`sm8750/v7.4-dev`)**、模块化 Kconfig、Mesa 26.2.6 (Freedreno / Turnip)、Qualcomm Iris VPU35 VA-API、补丁版 `libcamera 0.7.2` 与干净的 `.deb` / RootFS 构建体系。
+在联想小新 Pad Pro GT 13（**TB378FC / `zhiyu` / Snapdragon 8 Elite / SM8750P**，8GB+256GB）上运行 **Ubuntu Desktop 26.04 LTS (`resolute`)**，提供**跨平台一键刷机向导**与 **ZUXOS ↔ Ubuntu 同活动槽位一键双系统互切**。
 
-本项目基于并同步上游 [OnePlus Pad 2 Pro mainline](https://github.com/yzddmr6/onepluspad-2pro-mainline) (`v0.12.1`) 与 [linux-sm8750-erhai](https://github.com/yzddmr6/linux-sm8750-erhai) (`sm8750/v7.4-dev`) 的 SM8750P 公共内核/图形/启动封装成果，吸收社区 [linux-zhiyu](https://github.com/PickaxeHit/linux-zhiyu) 经硬件验证的休眠、对焦与固件回退修复，同时**严格隔离所有一加/小米板级驱动**，仅保留 TB378FC 专属板级代码。完整来源见 [NOTICE](NOTICE.md)。
+本项目基于统一主线 **Linux 7.4-rc2 (`sm8750/v7.4-dev`)**、13 个 TB378FC 原子补丁（`0001..0013`）、Mesa 26.2.6 (Freedreno / Turnip)、Qualcomm Iris VPU35 VA-API、补丁版 `libcamera 0.7.2` 与 `tb378fc-sensors` 传感器栈构建；同步上游 [OnePlus Pad 2 Pro mainline](https://github.com/yzddmr6/onepluspad-2pro-mainline) 与 [linux-sm8750-erhai](https://github.com/yzddmr6/linux-sm8750-erhai) 的 SM8750P 公共成果及 [linux-zhiyu](https://github.com/PickaxeHit/linux-zhiyu) 的休眠/对焦修复，同时**严格隔离所有一加/小米板级驱动**。完整来源见 [NOTICE](NOTICE.md)。
 
-## 架构亮点（v0.2.1）
+## 快速开始：一键刷机（v0.6.5）
 
-- **单一统一内核（Linux 7.4-rc2，10 个原子补丁 `0001..0010`）**：合入统一 `Image` + `sm8750-lenovo-tb378fc.dtb` + 标准 `/lib/modules/$(uname -r)`，彻底淘汰旧版 `7.2.0-tb378fc-wifi+` 与外置 `.ko` 热加载服务。
-- **原生 60 / 90 / 120 / 144 Hz 无缝连续切频**：`panel-novatek-nt36526.c` + `drm/msm` 原生双缓冲 DFPS（四档刷新率压缩 DSI 链路时钟均对齐 ~183 MHz，切换不黑屏）。
-- **相机自动对焦 + 补丁版 `libcamera 0.7.2`**：内核集成后摄 **DW9807（GT9772B）VCM 自动对焦**（安全行程限位 `0..400`、仅 Runtime PM 避免休眠弹响镜头）与 `60-persistent-v4l.rules` 防误触发规则；提供 `tools/build-libcamera-deb.py` 交叉构建支持 Adreno EGL debayer 与 CDAF 自动对焦的 `tb378fc-libcamera 0.7.2`。
-- **图形、硬解与桌面体验**：提供 `tools/build-mesa-deb.py`（GCC 14 `-O2`，Mesa 26.2.6 Adreno 830/830v1 Freedreno + Turnip）、Iris VPU35 AV1(3×)/10-bit(2×) 时钟缩放 + `tb378fc-iris-vaapi`、四扬声器 `q6apm-dai` 2ch/4ch 声道映射与完整 Electron/Wayland 环境变量。
-- **休眠与蓝牙兼容性加固**：补齐 SM8750 TSENS `no_irq_wake`（防降温阈值中断唤醒 `s2idle`）、UCSI `system_freezable_wq`，并为 WCN7860 蓝牙加入 `gngbt*` → 联想原厂 `brhbt*` 自动固件回退。
-- **Android Header v4 默认启动与测试流程**：**联想 TB378FC 原厂 ABL 不支持 `fastboot boot`（Header v2 镜像无效）**；统一使用 `tools/build-boot-triplet.py` 直接生成带 AVB 签名的 **GKI v4 启动镜像**（`boot.img` / `init_boot.img` / `vendor_boot.img`，可选 `--with-vbmeta`），在备份原厂三件套后刷入目标槽位验证（仅改内核时后续只需重刷 `boot` 分区）。
-- **模块化 Kconfig 与零硬编码**：采用 `defconfig` + 上游 `sm8750-{netfilter,peripherals,snap,virt,waydroid}.config` + 精简 `kernel/configs/tb378fc.config`（AppArmor、nf_tables、Rust Binder、Gunyah VM，显式关闭 `CONFIG_CRYPTO_DEV_QCE` 与全部非 TB378FC 板级驱动）；`packaging/device-support/` 零 `pad`/UID 1000 硬编码；`initramfs/init` 默认关闭调试通道（仅 `tb378fc.debug=1` 启用）。
+前往本仓库 **Releases** 下载 `v0.6.5` 通用刷机包（`tb378fc-ubuntu-v0.6.5-flash-kit.zip` + 两个 `<2 GiB` 的 `rootfs.squashfs.part00/part01` 分卷）：
+
+1. 解压 `tb378fc-ubuntu-v0.6.5-flash-kit.zip`，将 `.part00` 与 `.part01` 放入解压目录（或 `rootfs/` 子目录）。
+2. 平板解锁 Bootloader，在原厂 **ZUXOS**（支持 `_a` 或 `_b` 任意活动槽位）中开启 **USB 调试**，安装 **KernelSU** 并为 `Shell (com.android.shell)` 授予 root 权限。
+3. 连接电脑启动一键向导（仅依赖 Python 3.10+ 标准库与 `adb` / `fastboot`，无需 WSL 或额外驱动）：
+   - **Windows**：双击 `flash-windows.bat`
+   - **Linux / macOS**：终端执行 `./flash-linux.sh`
+4. 按菜单选择 **`[1] 首次全新双系统装机`**（自动备份本机原厂分区 → 启动 RAM 环境无损切分 `ubuntu` 分区 → 自动提取本机签名闭源固件 → 写入 Ubuntu 26.04 并激活双系统切换）或 **`[2] 已有分区一键重装`** / **`[3] 不格盘原地升级`**。
+
+> 公开仓库与 Release 刷机包**不包含任何联想/高通闭源受限固件或个人私钥**：所有设备签名固件（`adsp`、`cdsp`、`vpu35_4v.mbn`、`gen80000_zap.mbn`、`aw882xx_acf.bin`、触控与无线固件）均由一键向导在安装时从你自己的平板原厂分区现场自动提取、校验并完成本机 AVB 2.0 签名。
+
+## 核心特性（v0.6.5 真机已验证）
+
+- **同活动槽位一键双系统（`_a` / `_b` 自适应）**：保留原厂未修改 `vbmeta`（`Flags=0`，绝不使用会导致 ZUXOS ABL 拒启的 `--disable-verity` 或 `qbootctl -s`），通过 KernelSU 模块「操作 (Action)」按钮与 Ubuntu 桌面「切换到 Android」图标实现秒级安全互切。
+- **3504×2190 原生 60 / 90 / 120 / 144 Hz 无缝切频 + 背光持久化**：合入 VESA DSC 1.2 RC 参数编程补丁（`0011`）与双缓冲 DFPS；修复 GNOME 50 自动感光跨会话累加导致开机跳 100% 亮度的问题，重启持久保留用户设定亮度。
+- **完整图形与 H.264 / HEVC / VP9 / AV1 硬解**：Mesa 26.2.6（Adreno 830 Freedreno + Turnip Vulkan）+ `tb378fc-iris-vaapi` 解锁 Iris VPU35 全格式硬解。
+- **四扬声器四向随屏旋转 + 双麦录音 + USB-C DP 音视频输出**：AudioReach 拓扑 + AW88480 四功放动态方向路由 + 双路模拟麦克风立体声采集 + USB-C DisplayPort Alt Mode 视频与音频（`0013`）输出。
+- **前后摄横屏摆正 + 自动对焦 + V4L2 桌面桥接**：合入横屏 `rotation` 修正（`0012`）、DW9807（GT9772B）安全行程 CDAF 自动对焦、`tb378fc-libcamera 0.7.2` 与 `v4l2loopback` 虚拟摄像头桥接。
+- **传感器、磁吸皮套休眠与功耗管理**：`tb378fc-sensors 0.2.2` 提供四向重力旋转、霍尔磁吸皮套合盖 `s2idle` 休眠/开盖唤醒及相对迟滞光感滤波；内置 MGLRU、zram、UFS HWMON 与 6W 闭环功耗墙/温控档位持久化。
 
 ## 文档入口
 
 | 入口 | 内容 |
 |---|---|
-| [硬件支持](docs/HARDWARE.zh-CN.md) | 硬件模块状态、7.4 迁移清单与已知边界 |
-| [构建指南](docs/BUILD.zh-CN.md) | Linux 7.4 内核、Mesa 26.2.6、libcamera 0.7.2、initramfs、GKI v4 镜像与 Ubuntu 26.04 RootFS 构建 |
-| [双系统、安装与恢复](docs/FLASHING.zh-CN.md) | 原厂备份、ABL DTBO sink、GKI v4 刷入测试、双系统切换与紧急恢复 |
-| [开发说明](docs/DEVELOPMENT.zh-CN.md) | 目录规范、板级隔离红线与离线检查 |
-| [验证记录](docs/VALIDATION.zh-CN.md) | 实测范围与构建验收记录 |
-| [版本记录](CHANGELOG.md) | 架构演进与更新日志 |
+| [双系统、一键刷机与恢复](docs/FLASHING.zh-CN.md) | Release 一键刷机流程、首次装机两阶段说明、日常双系统互切与 Fastboot 紧急恢复 |
+| [硬件支持状态](docs/HARDWARE.zh-CN.md) | 各硬件子系统驱动、Linux 7.4 补丁矩阵与真机状态 |
+| [从源码构建指南](docs/BUILD.zh-CN.md) | 内核、Mesa、libcamera、传感器、RootFS 与通用刷机包完整构建流程 |
+| [开发与安全红线](docs/DEVELOPMENT.zh-CN.md) | 目录规范、板级隔离红线与离线校验 |
+| [真机验证记录](docs/VALIDATION.zh-CN.md) | 实机验证范围、双系统往返与已知边界 |
+| [版本更新日志](CHANGELOG.md) | `v0.1.0` → `v0.6.5` 完整演进记录 |
 
 ## 源码结构
 
 ```text
-kernel/       固定上游基线 (source.json)、Rust 工具链锁、10 个板级补丁 (0001..0010)、模块化 tb378fc.config
-initramfs/    最小化根分区挂载 (支持 tb378fc.root= 与 opt-in tb378fc.debug=1)
+kernel/       上游基线锁 (source.json)、Rust 工具链锁、13 个 TB378FC 原子补丁 (0001..0013)、tb378fc.config
+initramfs/    最小化早期挂载与可选调试 initramfs (默认支持 PARTLABEL=ubuntu 与 UUID=)
 packaging/
-  device-support/  无硬编码的 systemd 服务、动态会话助手、Electron/Wayland 环境、udev 规则、symlinks.json
-  audio/           AudioReach 拓扑源码 (Lenovo-TB378FC.m4)
-  camera/          libcamera TB378FC 参考补丁
-  mesa/            同步自上游 v0.12.1 的 Mesa 26.2.6 Adreno 830v1 补丁与校验锁
-  video-defaults/  GStreamer / Firefox / Chromium VA-API 硬解默认配置
+  device-support/  systemd 服务、GDM/GNOME 背光与温控策略、动态会话脚本、udev 规则
+  audio/           AudioReach 拓扑源码 (Lenovo-TB378FC.m4) 与 ALSA UCM2 配置
+  sensors/         高通 ADSP 传感器守护进程 (tb378fc-sensord.c，重力旋转 / 皮套霍尔 / 迟滞光感)
+  camera/          libcamera 0.7.2 TB378FC 补丁与 CDAF 对焦配置
+  mesa/            Mesa 26.2.6 Adreno 830 补丁与构建锁
+  video-defaults/  GStreamer / Firefox / Chromium VA-API 硬解默认环境
   desktop/         Ubuntu 26.04 Desktop ARM64 固定层校验锁
-switch/       同活动槽 Ubuntu / Android 切换器与 KernelSU 模块模板
-tools/        prepare-kernel.py / build-kernel.sh / build-initramfs.sh / build-boot-triplet.py (Header v4) /
-              build-debs.py / build-mesa-deb.py / build-libcamera-deb.py / build-desktop-rootfs.py /
-              install-tb378fc-firmware.py / qemu-smoke-test.py / check-source.py
-tests/        device-support 权限/配置单元测试与 HIL 真机回归套件 (tests/hil/)
-firmware/     本机闭源固件自行提取清单（仓库永不附带闭源固件、校准、密钥或原厂备份）
-third_party/  固定版本参考工具（AVB 签名与 ABL overlay sink 构建工具）
-docs/         中文构建、刷机、硬件与开发文档
+switch/       同活动槽 (_a / _b) Ubuntu ↔ Android 切换器与 KernelSU 模块模板
+tools/
+  flash-tb378fc.py       纯 Python 跨平台一键刷机、本地 AVB 签名、本机固件提取与双系统向导
+  build-flash-bundle.py  标准通用刷机包与 GitHub Release 分卷资产构建/隐私审计工具
+  gpt-split/             4K 扇区 UFS GPT 无损缩容分区工具 (tb378fc-gpt-split.c)
+  build-setup-initramfs.sh / build-initramfs.sh / build-boot-triplet.py / build-kernel.sh
+  build-debs.py / build-sensors-deb.py / build-mesa-deb.py / build-libcamera-deb.py / build-desktop-rootfs.py
+tests/        离线源码卫生、AVB 签名、DTBO 符号覆盖、GPT 切分、音频切片与系统配置单元测试
 ```
-
-## 许可与致谢
-
-设备适配与切换器按 GPL-2.0-only 发布；内核、Mesa、libcamera 及第三方参考代码保留各自原有许可，见 [NOTICE](NOTICE.md)。感谢 OnePlus Pad 2 Pro mainline、linux-zhiyu、Y700 社区及 Linux / Mesa / Ubuntu 上游开发者。

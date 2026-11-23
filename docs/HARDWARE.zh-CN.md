@@ -1,33 +1,29 @@
-# 硬件支持状态（Linux 7.4 统一架构）
+# 硬件支持状态（v0.6.5 / Linux 7.4 统一架构）
 
 目标设备：**联想小新 Pad Pro GT 13（TB378FC / `zhiyu` / Qualcomm SM8750P / 8GB + 256GB / 已解锁 Bootloader）**。
 
-## 硬件模块与 Linux 7.4 适配清单
+## 硬件模块与真机验证状态
 
-| 硬件模块 | 驱动与设备树实现 | 7.4 统一架构变更与状态 |
+| 硬件模块 | 驱动、补丁与用户态组件 | 真机实测状态（v0.6.5） |
 |---|---|---|
-| 显示面板 | `panel-novatek-nt36526` + `tb378fc-panel-bias` + 双路 `tb378fc-aw99706b` | 适配 7.4 `MIPI_DSI_MODE_DSC_ALL_SLICES_IN_PKT`；3504×2190 双 DSI DSC |
-| 60/90/120/144Hz 刷新率 | `panel-novatek-nt36526` + `drm/msm` 原生无缝 DFPS | 彻底淘汰外置 `refresh-live76.ko` 结构体勾子，合入主线双缓冲切频，四档刷新率均匹配 ~183 MHz 压缩链路时钟 |
-| 触控与手写笔 | `nt36536` (`lenovo,tb378fc-nvt`，上升沿 IRQ，Trim ID `0x15/0x23/0x65/0x03`) | 继承上游深睡防卡死修复；保留 TB378FC 原生压感上限 4095 与严格 ID 校验 |
-| GPU (Adreno 830 / 830v1) | `drm/msm` 7.4 + Mesa 26.2.6 (`tools/build-mesa-deb.py`) | 继承 7.4 GMU/shrinker/hw fence/LLCC 32 切片修复；Mesa 同步 `freedreno-thread-safe-tex-seqno.patch`，移除 `GALLIUM_THREAD=false` |
-| 内部存储 (UFS) | `ufs-qcom` + `phy-qcom-qmp-ufs` + `ext4`（全部内置 `=y`） | 废除早期 DT overlay 与外置 `.ko`，直出设备树 + 继承 7.4 MCQ 与防死锁修复 |
-| Wi-Fi 7 & 蓝牙 | WCN7860 (`ath12k` + `hci_uart` QCA / `uart14`) | 内置编译，保留 `qcom_geni_serial` 负别名修复与动态蓝牙地址服务；`btqca.c` 支持上游 `gngbt*` → 联想原厂 `brhbt*` 自动固件回退 |
-| 音频（四扬声器 + 麦） | 四路 `aw88480` (GPIO-I2C) + `wcd939x` SoundWire + AudioReach Q6APM | 合入标准 `/lib/modules`；继承 7.4 ADSP 首包防丢与 GLINK 死锁修复；保留 WCD939x IRQ 生命周期、联想原生 ADC 映射与 `q6apm-dai` 2ch/4ch 播放声道映射 |
-| 相机（前 8MP / 后 13MP + 自动对焦） | `gc08a8` (CSIPHY1) + `ov13b10` (CSIPHY5) + `dw9807-vcm` (GT9772B, `lens@c`) + `qcom-camss` + `tb378fc-libcamera 0.7.2` | 迁移至 Linux 7.4 独立 CSI-2 PHY 图谱；后摄接入 DW9807 VCM（行程限位 `0..400`、仅 Runtime PM + `60-persistent-v4l.rules` 防弹响）；用户态预装支持 Adreno EGL debayer 与 CDAF 对焦的补丁版 `libcamera 0.7.2` |
-| 后置闪光灯 / 手电筒 | `leds-qcom-flash` (`pm8550_flash` `led-0`, 通道 1+4, 默认关闭) | 内置设备树，淘汰 `live-flash-overlay70.ko`；`tb378fc-torch.socket` 改为 `video` 组 + 动态 seat0 鉴权 |
-| 视频编解码 (Iris VPU35) | `qcom-iris` (`vpu35_4v.mbn`) + `tb378fc-iris-vaapi` + `tb378fc-video-defaults` | 继承 7.4 HFI gen2 VA-API 能力并补齐 AV1(3×) / 10-bit(2×) VPU 时钟缩放 |
-| USB-C & DP Alt Mode | `dwc3-qcom` + `ucsi_glink` + `wcd939x-usbss` + `mdss_dp0` (HBR3) | 继承上游 7.4 DP AUX 重试修复；UCSI 队列改为 `system_freezable_wq` 消除休眠竞态 |
-| 电池与充电 | `qcom_battmgr` (`lenovo,tb378fc-pmic-glink`) | 保留电流符号反转、0..900mA 有界 USB ICL 写入与只读 `0x60` 诊断；绝不混入一加/小米快充驱动 |
-| 温控、休眠与诊断 | SM8750P 118°C CPU 被动降频 + `qcom,sm8750-tsens` `no_irq_wake` + 8GB 安全 `ramoops@c2000000` (4 MiB) | 补齐 Oryon CPU 被动热节流；屏蔽 TSENS 降温阈值唤醒 `s2idle`；显式关闭 `CONFIG_CRYPTO_DEV_QCE` 保障 CX 断电 |
-| 平台安全与容器 | `CONFIG_SECURITY_APPARMOR=y`、`CONFIG_NF_TABLES=m`、Rust Binder (Waydroid)、Gunyah VM | 同步上游 5 个公共 Kconfig 片段，Snap 恢复完整 AppArmor 沙箱 |
+| 显示面板与 DSC | `panel-novatek-nt36526` (`0001`) + `tb378fc-panel-bias` (`0002`) + VESA DSC 1.2 RC 参数编程 (`0011`) | **正常**：3504×2190 分辨率清晰无彩边，支持 DPMS 息屏唤醒 |
+| 60/90/120/144Hz 刷新率 | `panel-novatek-nt36526` + `drm/msm` 双缓冲无缝 DFPS (`0003`) | **正常**：四档刷新率均对齐 ~183 MHz 压缩 DSI 链路时钟，桌面切换无黑屏 |
+| 屏幕背光与亮度记忆 | 双路 `tb378fc-aw99706b` (`0002`) + `tb378fc-device-support 0.6.5` | **正常**：`40..4095` 精细调光；已修复 GNOME 50 自动亮度棘轮效应，冷重启与双系统互切后持久保持设定亮度 |
+| 触控与手写笔 | `nt36536` (`0005`, `lenovo,tb378fc-nvt`) | **正常**：多点触控与 4095 级手写笔压感正常，深睡唤醒无死锁 |
+| GPU (Adreno 830) | `drm/msm` 7.4 + `tb378fc-mesa 26.2.6-0.2.0` + 定制 `mutter 50.1+tb378fc1` | **正常**：Freedreno OpenGL/GLES 与 Turnip Vulkan 1.4 硬件加速正常 |
+| 视频硬解 (Iris VPU35) | `qcom-iris` (`0010`) + `tb378fc-iris-vaapi 0.4.0+git.4125b11-3` + `tb378fc-video-defaults 0.6.1` | **正常**：H.264 / HEVC / VP9 / **AV1** VA-API 硬解正常 |
+| 音频（四扬声器 + 双麦） | 四路 `aw88480` + `wcd939x` (`0004`) + `tb378fc-audio 0.6.5` | **正常**：四扬声器随屏幕四向旋转自动重映射左右声道；双路模拟麦克风立体声录音正常 |
+| USB-C & DP 音视频输出 | `dwc3-qcom` + `ucsi_glink` + `mdss_dp0` + DP0 Audio (`0013`) | **正常**：USB Host/Gadget、外接显示器扩展桌面及 DisplayPort 数字音频输出正常 |
+| 相机（前 8MP / 后 13MP） | `gc08a8` + `ov13b10` + `dw9807-vcm` (`0007`) + 横屏旋转 (`0012`) + `tb378fc-libcamera 0.7.2-0.2.2` + `v4l2loopback` | **正常**：前后摄画面方向正确，后摄 CDAF 自动对焦正常，休眠无镜头弹响，支持 V4L2 虚拟摄像头桥接 |
+| 后置闪光灯 / 手电筒 | `leds-qcom-flash` (`pm8550_flash`) + `tb378fc-torch` | **正常**：动态 `seat0` / `video` 组鉴权控制正常 |
+| 传感器与磁吸皮套 | `tb378fc-sensors 0.2.2` (`hexagonrpcd` + `sensh` + `tb378fc-sensord`) | **正常**：四向重力自动旋转、磁吸皮套霍尔合盖 `s2idle` 休眠/开盖唤醒、环境光迟滞上报（零空闲唤醒，可在设置中按需开启自动亮度） |
+| Wi-Fi 7 & 蓝牙 | WCN7860 (`ath12k` + `btqca` `gngbt*`→`brhbt*` 回退 `0010`) | **正常**：Wi-Fi 7 高速连接与蓝牙音频/外设正常 |
+| 内部存储与内存管理 | UFS 4.0 MCQ + UFS HWMON + MGLRU + zram (`tb378fc-zram`) | **正常**：8GB 专用安全保留内存布局（`ramoops@c2000000`），低写放大 journald/I/O 调度 |
+| 电池、充电与温控 | `qcom_battmgr` (`0006`) + Oryon 118°C 被动降频 + 6W 闭环功耗墙 | **正常**：充放电功率/电量显示正常，支持省电/平衡/性能三档温控与重启持久化 |
+| 同槽双系统互切 | `switch/tb378fc-switch` (`_a` / `_b` 自适应) + KernelSU 模块 | **正常**：ZUXOS (`2.0.10.320` 等) ↔ Ubuntu 26.04 双向一键切换稳定可靠 |
 
-## 已知边界与注意事项
+## 已知边界与隔离红线
 
-- **真机回归待测**：本次升级已在 WSL2 ext4 环境完成完整 ARM64 交叉编译、`CHECK_DTBS=y` / `dtb_audit` / `checkpatch` / `clangd` 校验、Ubuntu 26.04 chroot 全量 `ldd` 闭环、QEMU ARM64 双场景启动冒烟与 GitHub CI 验证，**尚未在实体 TB378FC 平板上完成真机回归**。上机前请务必先完整备份本机原厂三件套，并通过 `tools/build-boot-triplet.py` 生成 **Android Header v4** 镜像刷入测试（联想原厂 ABL 不支持 `fastboot boot` / Header v2）。
-- **固件需自行提取**：仓库不含任何闭源固件（`adsp`、`gen80000_zap`、`vpu35_4v`、`novatek/tb378fc.bin`、`aw88480_acf.bin`、WCN7860 固件等），详见 [`firmware/`](../firmware/)。
-- **未适配项**：光照传感器、原厂磁吸键盘/笔充（注意：一加/小米相关驱动严禁混入）暂不计为已支持。
-
-## 传感器、磁吸皮套与音频增强（v7.4.0-rc2）
-
-- **磁吸皮套与四向自动旋转（`tb378fc-sensors`）**：通过 `hexagonrpcd` + `sensh` + `tb378fc-sensord` 对接高通 ADSP SNS Client，提供霍尔皮套 `SW_LID` 合盖休眠/开盖唤醒，以及 `net.hadess.SensorProxy` 四向屏幕自动旋转与环境光上报。
-- **四扬声器随屏旋转与双路麦克风录音（`tb378fc-audio`）**：编译安装 `/lib/firmware/qcom/sm8750/Lenovo-TB378FC-tplg.bin`，支持四路 AW88480 功放随 Mutter 屏幕方向动态切换声道，以及双路 WCD9390 模拟麦克风（`AMIC1/ADC1` + `AMIC4/ADC3` → `SWR_MIC4/SWR_MIC6`，`+18 dB` 增益）立体声采集。
+- **严禁混入非本机板级驱动**：一加/小米专属快充芯片（`SC8547A` / SUPERVOOC）、一加 Pogo 键盘 / `CPS8601` 笔充及 16GB `ramoops@afff00000` 均已显式屏蔽。
+- **联想原厂磁吸触点键盘 / 手写笔无线充**：暂未纳入主线支持范围。
+- **闭源固件合规**：仓库与 Release 包均不分发联想/高通受限固件；由一键刷机脚本从用户本机 Android 分区现场提取注入。

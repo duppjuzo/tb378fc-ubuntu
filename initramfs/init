@@ -97,13 +97,17 @@ if [ -z "$root_spec" ] && [ -r /etc/root-uuid ]; then
     expected=$(cat /etc/root-uuid)
     [ -n "$expected" ] && root_spec="UUID=$expected"
 fi
-[ -n "$root_spec" ] || root_spec="PARTLABEL=linux_rootfs"
-
 volume=
 for _ in $(seq 1 60); do
-    volume=$(findfs "$root_spec" 2>/dev/null) && [ -n "$volume" ] && break
+    if [ -n "$root_spec" ]; then
+        volume=$(findfs "$root_spec" 2>/dev/null) && [ -n "$volume" ] && break
+    else
+        volume=$(findfs "PARTLABEL=ubuntu" 2>/dev/null) && [ -n "$volume" ] && break
+        volume=$(findfs "PARTLABEL=linux_rootfs" 2>/dev/null) && [ -n "$volume" ] && break
+    fi
     sleep 1
 done
+[ -n "$root_spec" ] || root_spec="PARTLABEL=ubuntu|linux_rootfs"
 [ -n "$volume" ] || fail "missing-root-volume:$root_spec"
 
 mkdir -p /run/tb378fc-root /run/desktop/minimal /run/desktop/standard /newroot

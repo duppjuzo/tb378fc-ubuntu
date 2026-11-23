@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.6.5 — 2026-11-23
+
+### 标准通用一键刷机包与跨平台全流程向导
+- 新增纯 Python 3.10+ 零外部依赖跨平台一键刷机向导 `tools/flash-tb378fc.py`（Windows `flash-windows.bat` / Linux & macOS `flash-linux.sh`），内置纯 Python AVB 2.0 `SHA256_RSA4096` 签名器、FDT/DTBO `__fixups__` 符号 100% 覆盖预检、AW88480 Music ACF 切片器与备份只读保护，覆盖首次自动分区装机、已有分区一键重装、不格盘原地升级与 Fastboot 紧急恢复四大模式。
+- 新增 4K 扇区 UFS GPT 无损缩容工具 `tools/gpt-split/tb378fc-gpt-split.c` 与自动分区 RAMdisk 构建脚本 `tools/build-setup-initramfs.sh`（支持 `tb378fc.autosplit=<GiB>` 免驱动自动切分回退 Fastboot）。
+- 新增通用刷机包打包与隐私/闭源固件红线审计工具 `tools/build-flash-bundle.py`，自动生成 `<2 GiB` 分卷纯净 RootFS SquashFS 与 GitHub Release 资产包。
+
+### 同活动槽位（`_a` / `_b`）双系统与桌面/背光体验修复
+- **GNOME 50 开机亮度持久化与光感迟滞滤波（`0.6.5` / `tb378fc-sensors 0.2.2`）**：新增 `90_tb378fc-power.gschema.override` 与 GDM 50 `90-tb378fc-greeter` 锁定策略，彻底修复自动亮度跨 GDM→桌面会话累加导致每次开机跳 100% 亮度的问题（保留设置面板手动自动亮度开关）；将 `tb378fc-sensord` 光照阈值升级为相对迟滞 `fmax(2.0, light * 0.08)`，消除空闲态 5 Hz `systemd-logind` 唤醒。
+- **Slot `_a` / `_b` 同槽双系统支持**：`switch/tb378fc-switch` 与 `tools/package-switch.py` 支持配置 `TB378FC_SLOT=_a|_b`，适配 OTA 升级至 `_b` 槽的 `ZUXOS 2.0.10.320` 双向一键互切，确立保留未修改原厂 `vbmeta` (`Flags=0`) 红线并彻底禁用 `qbootctl -s`。
+- **内核补丁扩展至 13 项（`0001..0013`）及多媒体全栈完善**：合入 VESA DSC 1.2 RC 参数编程（`0011`）、前后摄横屏旋转属性（`0012`）、USB-C DisplayPort0 音频输出（`0013`）、MGLRU + UFS HWMON + `v4l2loopback` 虚拟摄像头桥接、Iris VPU35 AV1 VA-API 硬解解锁、四扬声器四向随屏旋转及 6W 闭环功耗墙/温控档位持久化。
+
 ## 0.2.2-v7.4-audio-sensors-audit — 2026-11-22
 
 ### 双麦克风录音、四扬声器随屏旋转与磁吸皮套/传感器全栈合并

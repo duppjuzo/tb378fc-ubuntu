@@ -22,7 +22,11 @@ jobs:
         run: python3 tools/check-source.py
       - name: ShellCheck scripts
         run: |
-          shellcheck initramfs/init initramfs/shutdown initramfs/usb-diag             tools/build-kernel.sh tools/build-initramfs.sh             packaging/device-support/tree/usr/local/libexec/tb378fc-zram             packaging/device-support/tree/usr/local/libexec/tb378fc-mesa-hardware-probe             packaging/device-support/tree/usr/local/bin/tb378fc-desktop-init             packaging/device-support/tree/usr/local/bin/tb378fc-gpu-monitor             packaging/device-support/tree/usr/lib/systemd/user-environment-generators/80-tb378fc-mesa             packaging/device-support/tree/usr/lib/systemd/system-sleep/tb378fc-suspend-cycle
+          shellcheck initramfs/init initramfs/shutdown initramfs/usb-diag             tools/build-kernel.sh tools/build-initramfs.sh tools/build-setup-initramfs.sh             packaging/device-support/tree/usr/local/libexec/tb378fc-zram             packaging/device-support/tree/usr/local/libexec/tb378fc-mesa-hardware-probe             packaging/device-support/tree/usr/local/bin/tb378fc-desktop-init             packaging/device-support/tree/usr/local/bin/tb378fc-gpu-monitor             packaging/device-support/tree/usr/lib/systemd/user-environment-generators/80-tb378fc-mesa             packaging/device-support/tree/usr/lib/systemd/system-sleep/tb378fc-suspend-cycle
+      - name: Compile GPT split & reboot-bootloader C tools
+        run: |
+          gcc -O2 -Wall -Wextra -Werror tools/gpt-split/tb378fc-gpt-split.c -o /tmp/tb378fc-gpt-split
+          gcc -O2 -Wall -Wextra -Werror tools/gpt-split/reboot-bootloader.c -o /tmp/reboot-bootloader
       - name: Run device-support unit tests
         run: python3 -m unittest discover -s tests -v
       - name: Run switch logic offline tests
