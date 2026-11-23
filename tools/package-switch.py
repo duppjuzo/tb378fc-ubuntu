@@ -10,6 +10,8 @@ ROOT = Path(__file__).resolve().parent.parent
 p = argparse.ArgumentParser(description=__doc__)
 p.add_argument('--serial', required=True, help='Physical ADB/fastboot serial, not ro.product.model')
 p.add_argument('--soc-serial', required=True, help='Linux /sys/devices/soc0/serial_number')
+p.add_argument('--slot', choices=['_a', '_b'], default='_a',
+               help='Active A/B slot bound to this same-slot switch archive (default: _a)')
 p.add_argument('--output', type=Path, required=True)
 a = p.parse_args()
 if not re.fullmatch(r'[A-Za-z0-9_-]{4,64}', a.serial) or not re.fullmatch(r'[0-9]{1,20}', a.soc_serial):
@@ -19,7 +21,7 @@ if 'NOT_CONFIGURED' in a.serial:
 if a.output.exists():
     p.error('Output already exists')
 a.output.parent.mkdir(parents=True, exist_ok=True)
-config = f'TB378FC_SERIAL={a.serial}\nTB378FC_SOC_SERIAL={a.soc_serial}\n'
+config = f'TB378FC_SERIAL={a.serial}\nTB378FC_SOC_SERIAL={a.soc_serial}\nTB378FC_SLOT={a.slot}\n'
 with zipfile.ZipFile(a.output, 'x', compression=zipfile.ZIP_DEFLATED) as z:
     for name in ['module.prop', 'action.sh', 'customize.sh']:
         z.write(ROOT / 'switch/ksu-module' / name, name)

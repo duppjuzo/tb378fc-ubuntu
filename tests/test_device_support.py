@@ -328,5 +328,28 @@ class TestUfsMemoryOomdAndSecurityCenter(unittest.TestCase):
         self.assertNotIn('tb378fc-slot-switch', desk)
 
 
+    def test_same_slot_switch_supports_configured_slot_b(self):
+        import subprocess, tempfile, zipfile
+        sw = (ROOT / 'switch/tb378fc-switch').read_text(encoding='utf-8')
+        self.assertIn('TB378FC_SLOT=', sw)
+        self.assertIn('expected active slot $expected_slot, got $SLOT', sw)
+        with tempfile.TemporaryDirectory() as td:
+            out_zip = Path(td) / 'switch-b.zip'
+            subprocess.run(
+                ['python3', str(ROOT / 'tools/package-switch.py'),
+                 '--serial', 'TEST1234', '--soc-serial', '987654321',
+                 '--slot', '_b', '--output', str(out_zip)],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            with zipfile.ZipFile(out_zip) as zf:
+                conf = zf.read('device.conf').decode('utf-8')
+                self.assertIn('TB378FC_SLOT=_b', conf)
+                self.assertIn('tb378fc-switch', zf.namelist())
+                self.assertNotIn('qbootctl', ' '.join(zf.namelist()))
+            side_conf = out_zip.with_suffix('.device.conf').read_text(encoding='utf-8')
+            self.assertIn('TB378FC_SLOT=_b', side_conf)
+
 if __name__ == '__main__':
     unittest.main()

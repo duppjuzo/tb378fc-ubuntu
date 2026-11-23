@@ -532,7 +532,16 @@ if [ -z "$DEV_DIR" ]; then
 	else
 		[ "$(cat /sys/devices/soc0/serial_number 2>/dev/null)" = "$expected_soc" ] || die 'unexpected tablet SoC serial'
 	fi
-	[ "$SLOT" = _a ] || die 'only active A layout is supported'
+	raw_slot=$(sed -n 's/^TB378FC_SLOT=\(.*\)$/\1/p' "$config" | head -n 1)
+	if [ -n "$raw_slot" ]; then
+		case $raw_slot in
+		_a|_b) expected_slot=$raw_slot ;;
+		*) die "invalid TB378FC_SLOT in device binding: $raw_slot" ;;
+		esac
+	else
+		expected_slot=_a
+	fi
+	[ "$SLOT" = "$expected_slot" ] || die "expected active slot $expected_slot, got $SLOT"
 fi
 
 if [ -n "$STORE" ]; then
