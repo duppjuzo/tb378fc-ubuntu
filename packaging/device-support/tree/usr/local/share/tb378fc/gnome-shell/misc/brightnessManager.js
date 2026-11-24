@@ -532,61 +532,68 @@ export const BrightnessManager = GObject.registerClass({
             return;
         this._inhibitUpdates = true;
 
-        for (const scale of this._monitorScales.values()) {
-            if (scale.syncWithBacklight()) {
-                this._dimmingEnabled = false;
+        try {
+            for (const scale of this._monitorScales.values()) {
+                if (scale.syncWithBacklight()) {
+                    this._dimmingEnabled = false;
+                }
             }
-        }
 
-        const changedScales = [...this._monitorScales.values()].filter(s => {
-            const c = s._scaleChanged;
-            s._scaleChanged = false;
-            return c;
-        });
+            const changedScales = [...this._monitorScales.values()].filter(s => {
+                const c = s._scaleChanged;
+                s._scaleChanged = false;
+                return c;
+            });
 
-        if (changedScales.length > 0) {
-            const max = Math.max(...[...this._monitorScales.values()]
-                .map(s => s.value));
+            if (changedScales.length > 0) {
+                const max = Math.max(...[...this._monitorScales.values()]
+                    .map(s => s.value));
 
-            if (max > 0.01) {
+                if (max > 0.01) {
+                    for (const scale of this._monitorScales.values())
+                        scale.updateScaleFactor(max);
+                }
+
+                if (this._abTarget < 0.0 || fromUser)
+                    this._globalScale.value = max;
+
+                if (showOSD)
+                    this._showOSD(changedScales);
+            } else if (this._globalScaleChanged) {
+                this._globalScaleChanged = false;
+
                 for (const scale of this._monitorScales.values())
-                    scale.updateScaleFactor(max);
+                    scale.syncWithScale(this._globalScale);
+
+                if (showOSD)
+                    this._showOSD(this._monitorScales.values());
             }
 
-            if (this._abTarget < 0.0 || fromUser)
-                this._globalScale.value = max;
+            let maxEffective = 0.0;
+            for (const scale of this._monitorScales.values()) {
+                const target = this._abTarget >= 0.0
+                    ? applyUserBias(this._abTarget, this._userBias)
+                    : scale.value;
 
-            if (showOSD)
-                this._showOSD(changedScales);
-        } else if (this._globalScaleChanged) {
-            this._globalScaleChanged = false;
+                const max = this._dimmingEnabled ? this._dimmingTarget : 1.0;
+                const brightness = Math.min(max, target);
 
-            for (const scale of this._monitorScales.values())
-                scale.syncWithScale(this._globalScale);
+                scale.setBacklight(brightness);
+                if (!this._dimmingEnabled)
+                    scale.value = target;
+                maxEffective = Math.max(maxEffective, target);
+            }
 
-            if (showOSD)
-                this._showOSD(this._monitorScales.values());
+            if (maxEffective > 0.01) {
+                for (const scale of this._monitorScales.values())
+                    scale.updateScaleFactor(maxEffective);
+            }
+
+            if (this._abTarget >= 0.0 && !fromUser && this._monitorScales.size > 0)
+                this._globalScale.value = maxEffective;
+        } finally {
+            this._inhibitUpdates = false;
         }
-
-        let maxEffective = 0.0;
-        for (const scale of this._monitorScales.values()) {
-            const target = this._abTarget >= 0.0
-                ? applyUserBias(this._abTarget, this._userBias)
-                : scale.value;
-
-            const max = this._dimmingEnabled ? this._dimmingTarget : 1.0;
-            const brightness = Math.min(max, target);
-
-            scale.setBacklight(brightness);
-            if (!this._dimmingEnabled)
-                scale.value = target;
-            maxEffective = Math.max(maxEffective, target);
-        }
-
-        if (this._abTarget >= 0.0 && !fromUser && this._monitorScales.size > 0)
-            this._globalScale.value = maxEffective;
-
-        this._inhibitUpdates = false;
     }
 
     _showOSD(monitorScales) {
@@ -720,6 +727,10 @@ const MonitorBrightnessScale = GObject.registerClass({
 
         this.value = this._getRelativeBrightness(backlight);
         return true;
+    }
+
+    syncWithScale(globalScale) {
+        this.value = globalScale.value * this._scaleFactor;
     }
 
     setBacklight(brightness) {

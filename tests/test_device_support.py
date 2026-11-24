@@ -375,6 +375,8 @@ class TestUfsMemoryOomdAndSecurityCenter(unittest.TestCase):
         self.assertIn('BRIGHTEN_DEBOUNCE_MS = 1800', bm_js)
         self.assertIn('DARKEN_DEBOUNCE_MS = 900', bm_js)
         self.assertIn('applyUserBias', bm_js)
+        self.assertIn('syncWithScale(globalScale)', bm_js)
+        self.assertIn('finally {', bm_js)
 
 
     def test_bluetooth_aac_wireplumber_bqr_and_kconfig(self):
