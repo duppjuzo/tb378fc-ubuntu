@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-2.0-only
-"""Package tb378fc-video-defaults (GStreamer VA, Firefox VA-API, Chromium Wayland/VA-API)."""
+"""Package tb378fc-video-defaults (GStreamer VA dec/enc, Firefox VA-API, Chromium/Chrome Wayland+VA-API)."""
 import argparse
 import os
 from pathlib import Path
@@ -28,6 +28,36 @@ def main() -> int:
             (src / "control").read_text(encoding="utf-8").replace("@VERSION@", version),
             encoding="utf-8",
         )
+        conffiles = sorted(
+            "/" + p.relative_to(root).as_posix()
+            for p in (root / "etc").rglob("*")
+            if p.is_file() and not p.is_symlink()
+        )
+        if conffiles:
+            (ctrl / "conffiles").write_text("\n".join(conffiles) + "\n", encoding="utf-8")
+        postinst = ctrl / "postinst"
+        postinst.write_text(
+            "#!/bin/sh\n"
+            "set -eu\n"
+            'if [ "$1" = "configure" ] && [ -x /usr/local/libexec/tb378fc-sync-chrome-vaapi ]; then\n'
+            "    /usr/local/libexec/tb378fc-sync-chrome-vaapi || true\n"
+            "fi\n"
+            "exit 0\n",
+            encoding="utf-8",
+        )
+        postinst.chmod(0o755)
+        prerm = ctrl / "prerm"
+        prerm.write_text(
+            "#!/bin/sh\n"
+            "set -eu\n"
+            'if [ "$1" = "remove" ]; then\n'
+            "    rm -f /usr/local/bin/google-chrome-stable /usr/local/bin/google-chrome "
+            "/usr/local/share/applications/google-chrome.desktop || true\n"
+            "fi\n"
+            "exit 0\n",
+            encoding="utf-8",
+        )
+        prerm.chmod(0o755)
         doc = root / "usr/share/doc/tb378fc-video-defaults"
         doc.mkdir(parents=True)
         shutil.copy2(REPO / "packaging/iris-vaapi/README.md", doc / "README.md")

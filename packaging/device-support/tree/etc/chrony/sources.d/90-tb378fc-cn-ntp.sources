@@ -1,0 +1,4 @@
+# Low-latency domestic NTP primary & fallback sources for Lenovo TB378FC
+server 203.107.6.88 iburst prefer
+server ntp.aliyun.com iburst
+server ntp.tencent.com iburst

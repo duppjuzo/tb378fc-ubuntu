@@ -1,0 +1,33 @@
+#!/bin/sh
+# SPDX-License-Identifier: GPL-2.0-only
+# Synchronize local Wayland + Iris VA-API wrapper & launcher for official google-chrome-stable
+# only when Google Chrome is actually installed on the system.
+set -eu
+
+CHROME_BIN="/usr/bin/google-chrome-stable"
+WRAP_STABLE="/usr/local/bin/google-chrome-stable"
+WRAP_ALIAS="/usr/local/bin/google-chrome"
+SRC_DESKTOP="/usr/share/applications/google-chrome.desktop"
+DST_DESKTOP="/usr/local/share/applications/google-chrome.desktop"
+FLAGS="--ozone-platform-hint=auto --enable-wayland-ime --wayland-text-input-version=3 --enable-features=AcceleratedVideoDecodeLinuxGL,AcceleratedVideoDecodeLinuxZeroCopyGL,VaapiVideoDecodeLinuxGL,AcceleratedVideoEncoder,VaapiIgnoreDriverChecks"
+
+if [ -x "$CHROME_BIN" ]; then
+    mkdir -p /usr/local/bin /usr/local/share/applications
+    cat >"$WRAP_STABLE" <<EOF
+#!/bin/sh
+exec /usr/bin/google-chrome-stable $FLAGS "\$@"
+EOF
+    chmod 0755 "$WRAP_STABLE"
+    ln -sf google-chrome-stable "$WRAP_ALIAS"
+    if [ -f "$SRC_DESKTOP" ]; then
+        sed 's#Exec=/usr/bin/google-chrome-stable#Exec=/usr/local/bin/google-chrome-stable#g'             "$SRC_DESKTOP" >"$DST_DESKTOP"
+        chmod 0644 "$DST_DESKTOP"
+    fi
+else
+    rm -f "$WRAP_STABLE" "$WRAP_ALIAS" "$DST_DESKTOP"
+fi
+
+if command -v update-desktop-database >/dev/null 2>&1 && [ -d /usr/local/share/applications ]; then
+    update-desktop-database /usr/local/share/applications >/dev/null 2>&1 || true
+fi
+exit 0

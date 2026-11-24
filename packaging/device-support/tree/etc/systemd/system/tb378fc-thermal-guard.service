@@ -2,7 +2,6 @@
 Description=Lenovo TB378FC Native Power-Profiles, uclamp Scheduler & Thermal/6W Power Controller
 After=dbus.service local-fs.target tb378fc-hw-init.service
 Before=gdm.service display-manager.service
-Conflicts=power-profiles-daemon.service
 
 [Service]
 Type=simple

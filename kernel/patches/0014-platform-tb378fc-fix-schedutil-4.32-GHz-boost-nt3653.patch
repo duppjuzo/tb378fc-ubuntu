@@ -1,0 +1,648 @@
+From c6266851a9c7d96a347911700a0ea0335a9e6361 Mon Sep 17 00:00:00 2001
+From: TB378FC Maintainer <maintainer@tb378fc.local>
+Date: Tue, 24 Nov 2026 15:06:07 +0800
+Subject: [PATCH] platform: tb378fc: fix schedutil 4.32 GHz boost, nt36536, and
+ DTS warnings
+
+1. cpufreq/schedutil: map utilization against min(cpuinfo.max_freq,
+   policy->max) when policy->boost_enabled is active and policy->max
+   exceeds sustained arch_scale_freq_ref, unlocking 4.20/4.32 GHz SCMI
+   Boost OPPs on CPU6-7 under schedutil + EAS + uclamp without shifting
+   non-boost capacity ratios. Reset cpuinfo.max_freq in
+   cpufreq_boost_set_sw() so disabling boost clamps policy limits back
+   to sustained frequency cleanly.
+2. Input: nt36536: disable NVT_DEBUG=1 pr_err flood (downgrade NVT_LOG
+   to pr_debug) and cache parsed firmware + header map in RAM across
+   panel wake cycles to avoid repeated filesystem reads and checksums.
+3. Bluetooth: btqca: use firmware_request_nowarn() when probing optional
+   WCN7860 candidate filenames before Lenovo brhbtfw*.tlv fallback.
+4. power: supply: qcom_battmgr: set QCOM_BATTMGR_QUIRK_NO_CHARGE_CONTROL
+   on lenovo,tb378fc-pmic-glink where Android PMIC GLINK does not
+   implement Windows-on-Arm opcode 0x48 charge thresholds.
+5. DTS & audio/camera polish: add wcd939x MBHC voltage thresholds and
+   lpass_vamacro dmic-sample-rate to sm8750-lenovo-tb378fc.dts,
+   downgrade intentional SoundWire DT port-count override log to
+   dev_dbg, and use dev_err_probe() for deferred CAMSS CSIPHY init.
+
+6. usb/dp/coresight: expose DWC3 Type-C mode-switch on TB378FC (&usb) so
+   4-lane DisplayPort (Pin Assignment C/E, e.g. 5120x2880) switches DWC3
+   to UTMI clock before QMP powers down pipe_clk, preventing xHCI/DWC3
+   hangs and watchdog SoC resets on unplug; guard msm_dp_audio_shutdown()
+   against unclocked MMIO writes after DP power-off; and disable unused
+   CoreSight trace NOC (tn@109ab000).
+7. Input: nt36536: defer panel-follower firmware load via delayed_work
+   with firmware_request_nowarn() until rootfs /lib/firmware/novatek/
+   tb378fc.bin mounts, fixing cold-boot dead touch without screen off/on.
+
+Signed-off-by: TB378FC Maintainer <maintainer@tb378fc.local>
+---
+ .../boot/dts/qcom/sm8750-lenovo-tb378fc.dts   | 12 ++++
+ drivers/bluetooth/btqca.c                     | 60 ++++++++++------
+ drivers/cpufreq/cpufreq.c                     |  1 +
+ drivers/gpu/drm/msm/dp/dp_audio.c             |  4 +-
+ drivers/input/touchscreen/nt36536/nt36536.c   | 44 +++++++++---
+ drivers/input/touchscreen/nt36536/nt36536.h   | 12 ++--
+ .../touchscreen/nt36536/nt36536_fw_update.c   | 70 ++++++++++++++++---
+ drivers/media/platform/qcom/camss/camss.c     |  8 +--
+ drivers/power/supply/qcom_battmgr.c           |  1 +
+ drivers/soundwire/qcom.c                      |  4 +-
+ kernel/sched/cpufreq_schedutil.c              |  5 +-
+ 11 files changed, 169 insertions(+), 52 deletions(-)
+
+diff --git a/arch/arm64/boot/dts/qcom/sm8750-lenovo-tb378fc.dts b/arch/arm64/boot/dts/qcom/sm8750-lenovo-tb378fc.dts
+index a0c47afee2b..a5c3a27e72e 100644
+--- a/arch/arm64/boot/dts/qcom/sm8750-lenovo-tb378fc.dts
++++ b/arch/arm64/boot/dts/qcom/sm8750-lenovo-tb378fc.dts
+@@ -232,6 +232,9 @@ wcd939x: tb378fc-wcd939x {
+ 		qcom,micbias2-microvolt = <1800000>;
+ 		qcom,micbias3-microvolt = <1800000>;
+ 		qcom,micbias4-microvolt = <1800000>;
++		qcom,mbhc-buttons-vthreshold-microvolt = <75000 150000 237000 500000
++							  500000 500000 500000 500000>;
++		qcom,mbhc-headphone-vthreshold-microvolt = <50000>;
+ 		qcom,rx-device = <&wcd939x_rx>;
+ 		qcom,tx-device = <&wcd939x_tx>;
+ 	};
+@@ -1517,7 +1520,12 @@ &usb_dp_qmpphy_out {
+ 	remote-endpoint = <&pmic_glink_ss_in>;
+ };
+ 
++&{/soc@0/tn@109ab000} {
++	status = "disabled";
++};
++
+ &usb {
++	mode-switch;
+ 	usb-psy-name = "qcom-battmgr-usb";
+ 	usb-role-switch;
+ 	dr_mode = "otg";
+@@ -1557,6 +1565,10 @@ fastrpc {
+ 	};
+ };
+ 
++&lpass_vamacro {
++	qcom,dmic-sample-rate = <4800000>;
++};
++
+ &swr1 {
+ 	status = "okay";
+ 
+diff --git a/drivers/bluetooth/btqca.c b/drivers/bluetooth/btqca.c
+index 2cc75c037b1..8757281afcd 100644
+--- a/drivers/bluetooth/btqca.c
++++ b/drivers/bluetooth/btqca.c
+@@ -551,38 +551,51 @@ static int qca_inject_cmd_complete_event(struct hci_dev *hdev)
+ 	return hci_recv_frame(hdev, skb);
+ }
+ 
+-static int qca_download_firmware(struct hci_dev *hdev,
+-				 struct qca_fw_config *config,
+-				 enum qca_btsoc_type soc_type,
+-				 u8 rom_ver)
++static int qca_download_firmware_opt(struct hci_dev *hdev,
++				     struct qca_fw_config *config,
++				     enum qca_btsoc_type soc_type,
++				     u8 rom_ver, bool quiet_missing)
+ {
+ 	const struct firmware *fw;
+ 	u8 *data;
+ 	const u8 *segment;
+ 	int ret, size, remain, i = 0;
+ 
+-	bt_dev_info(hdev, "QCA Downloading %s", config->fwname);
+-
+-	ret = request_firmware(&fw, config->fwname, &hdev->dev);
++	if (quiet_missing) {
++		bt_dev_dbg(hdev, "QCA Probing %s", config->fwname);
++		ret = firmware_request_nowarn(&fw, config->fwname, &hdev->dev);
++	} else {
++		bt_dev_info(hdev, "QCA Downloading %s", config->fwname);
++		ret = request_firmware(&fw, config->fwname, &hdev->dev);
++	}
+ 	if (ret) {
+ 		/* If the board-specific file is missing, try loading the default
+ 		 * one, unless that was attempted already.
+ 		 */
+ 		if (config->type == TLV_TYPE_NVM &&
+ 		    qca_get_alt_nvm_file(config->fwname, sizeof(config->fwname))) {
+-			bt_dev_info(hdev, "QCA Downloading %s", config->fwname);
+-			ret = request_firmware(&fw, config->fwname, &hdev->dev);
++			if (quiet_missing) {
++				bt_dev_dbg(hdev, "QCA Probing %s", config->fwname);
++				ret = firmware_request_nowarn(&fw, config->fwname, &hdev->dev);
++			} else {
++				bt_dev_info(hdev, "QCA Downloading %s", config->fwname);
++				ret = request_firmware(&fw, config->fwname, &hdev->dev);
++			}
+ 			if (ret) {
+-				bt_dev_err(hdev, "QCA Failed to request file: %s (%d)",
+-					   config->fwname, ret);
++				if (!quiet_missing)
++					bt_dev_err(hdev, "QCA Failed to request file: %s (%d)",
++						   config->fwname, ret);
+ 				return ret;
+ 			}
+ 		} else {
+-			bt_dev_err(hdev, "QCA Failed to request file: %s (%d)",
+-				   config->fwname, ret);
++			if (!quiet_missing)
++				bt_dev_err(hdev, "QCA Failed to request file: %s (%d)",
++					   config->fwname, ret);
+ 			return ret;
+ 		}
+ 	}
++	if (quiet_missing)
++		bt_dev_info(hdev, "QCA Downloading %s", config->fwname);
+ 
+ 	size = fw->size;
+ 	data = vmalloc(fw->size);
+@@ -636,6 +649,14 @@ static int qca_download_firmware(struct hci_dev *hdev,
+ 	return ret;
+ }
+ 
++static int qca_download_firmware(struct hci_dev *hdev,
++				 struct qca_fw_config *config,
++				 enum qca_btsoc_type soc_type,
++				 u8 rom_ver)
++{
++	return qca_download_firmware_opt(hdev, config, soc_type, rom_ver, false);
++}
++
+ static int qca_disable_soc_logging(struct hci_dev *hdev)
+ {
+ 	struct sk_buff *skb;
+@@ -839,7 +860,8 @@ int qca_uart_setup(struct hci_dev *hdev, uint8_t baudrate,
+ 		}
+ 	}
+ 
+-	err = qca_download_firmware(hdev, &config, soc_type, rom_ver);
++	err = qca_download_firmware_opt(hdev, &config, soc_type, rom_ver,
++					!rampatch_name && soc_type == QCA_WCN7860);
+ 	/* For WCN6750, if mbn file is not present then check for
+ 	 * tlv file.
+ 	 */
+@@ -856,14 +878,10 @@ int qca_uart_setup(struct hci_dev *hdev, uint8_t baudrate,
+ 			 "qca/hpbtfw%02x.tlv", rom_ver);
+ 		err = qca_download_firmware(hdev, &config, soc_type, rom_ver);
+ 	} else if (err < 0 && !rampatch_name && soc_type == QCA_WCN7860) {
+-		bt_dev_dbg(hdev, "QCA Failed to request file: %s (%d)",
+-			   config.fwname, err);
+ 		snprintf(config.fwname, sizeof(config.fwname),
+ 			 "qca/brhbtfw%02x.mbn", rom_ver);
+-		err = qca_download_firmware(hdev, &config, soc_type, rom_ver);
++		err = qca_download_firmware_opt(hdev, &config, soc_type, rom_ver, true);
+ 		if (err < 0) {
+-			bt_dev_dbg(hdev, "QCA Failed to request file: %s (%d)",
+-				   config.fwname, err);
+ 			config.type = TLV_TYPE_PATCH;
+ 			snprintf(config.fwname, sizeof(config.fwname),
+ 				 "qca/brhbtfw%02x.tlv", rom_ver);
+@@ -954,7 +972,9 @@ int qca_uart_setup(struct hci_dev *hdev, uint8_t baudrate,
+ 		}
+ 	}
+ 
+-	err = qca_download_firmware(hdev, &config, soc_type, rom_ver);
++	err = qca_download_firmware_opt(hdev, &config, soc_type, rom_ver,
++					!firmware_name && soc_type == QCA_WCN7860 &&
++					!wcn7860_use_brh);
+ 	if (err < 0 && !firmware_name && soc_type == QCA_WCN6855) {
+ 		qca_get_nvm_name_by_board(config.fwname, sizeof(config.fwname),
+ 					  "hpnv", soc_type, ver, rom_ver, boardid);
+diff --git a/drivers/cpufreq/cpufreq.c b/drivers/cpufreq/cpufreq.c
+index 54dde8419bd..9719de19031 100644
+--- a/drivers/cpufreq/cpufreq.c
++++ b/drivers/cpufreq/cpufreq.c
+@@ -2802,6 +2802,7 @@ int cpufreq_boost_set_sw(struct cpufreq_policy *policy, int state)
+ 	if (!policy->freq_table)
+ 		return -ENXIO;
+ 
++	policy->cpuinfo.max_freq = 0;
+ 	ret = cpufreq_frequency_table_cpuinfo(policy);
+ 	if (ret)
+ 		pr_err("%s: Policy frequency update failed\n", __func__);
+diff --git a/drivers/gpu/drm/msm/dp/dp_audio.c b/drivers/gpu/drm/msm/dp/dp_audio.c
+index 8960f015612..ee51a65fb1a 100644
+--- a/drivers/gpu/drm/msm/dp/dp_audio.c
++++ b/drivers/gpu/drm/msm/dp/dp_audio.c
+@@ -330,7 +330,9 @@ void msm_dp_audio_shutdown(struct drm_bridge *bridge,
+ 	if (!msm_dp_display->audio_enabled)
+ 		return;
+ 
+-	msm_dp_audio_enable(audio, false);
++	msm_dp_display->audio_enabled = false;
++	if (msm_dp_display->power_on)
++		msm_dp_audio_enable(audio, false);
+ 	/* signal the dp display to safely shutdown clocks */
+ 	msm_dp_display_signal_audio_complete(msm_dp_display);
+ }
+diff --git a/drivers/input/touchscreen/nt36536/nt36536.c b/drivers/input/touchscreen/nt36536/nt36536.c
+index 83dd31a1f33..33b92dd81d1 100644
+--- a/drivers/input/touchscreen/nt36536/nt36536.c
++++ b/drivers/input/touchscreen/nt36536/nt36536.c
+@@ -1370,7 +1370,10 @@ __ATTRIBUTE_GROUPS(nvt_ts);
+ 
+ static void nvt_resume_work(struct work_struct *work)
+ {
+-	struct nvt_ts_data *ts_core = container_of(work, struct nvt_ts_data, resume_work);
++	struct nvt_ts_data *ts_core = container_of(to_delayed_work(work),
++						   struct nvt_ts_data,
++						   resume_work);
++
+ 	nvt_ts_resume(&ts_core->client->dev);
+ }
+ 
+@@ -1445,7 +1448,7 @@ static void nvt_destroy_workqueues(struct nvt_ts_data *ts_core)
+ {
+ 	/* Suspend/resume work can touch both firmware and ESD workqueues. */
+ 	if (ts_core->event_wq) {
+-		cancel_work_sync(&ts_core->resume_work);
++		cancel_delayed_work_sync(&ts_core->resume_work);
+ 		destroy_workqueue(ts_core->event_wq);
+ 		ts_core->event_wq = NULL;
+ 	}
+@@ -1600,7 +1603,7 @@ static int32_t nvt_ts_probe(struct spi_device *client)
+ 		ret = -ENOMEM;
+ 		goto err_destroy_workqueues;
+ 	}
+-	INIT_WORK(&ts->resume_work, nvt_resume_work);
++	INIT_DELAYED_WORK(&ts->resume_work, nvt_resume_work);
+ 
+ 	/*
+ 	 * Add the follower before any input device exists.  If the panel is
+@@ -1785,7 +1788,7 @@ static int32_t nvt_ts_probe(struct spi_device *client)
+ 		spin_unlock_irqrestore(&ts->lifecycle_lock, flags);
+ 
+ 		if (queue_resume)
+-			queue_work(ts->event_wq, &ts->resume_work);
++			queue_delayed_work(ts->event_wq, &ts->resume_work, 0);
+ 	}
+ 
+ 	if (!ts->is_panel_follower) {
+@@ -1858,6 +1861,7 @@ static void nvt_ts_remove(struct spi_device *client)
+ 	nvt_unregister_panel_follower(ts);
+ 	nvt_irq_enable(false);
+ 	nvt_destroy_workqueues(ts);
++	nvt_fw_cache_release();
+ 	if (ts->irq_requested) {
+ 		free_irq(client->irq, ts);
+ 		ts->irq_requested = false;
+@@ -2042,9 +2046,11 @@ static int32_t nvt_ts_resume(struct device *dev)
+ 	 * The vendor core waits touchpanel,irq_need_dev_resume_time (500ms in
+ 	 * the stock dtsi) after resume before touching the IC, letting the
+ 	 * TDDI analog block (charge pump / AVDD) settle after the shared
+-	 * panel reset.  Mirror that before the firmware download.
++	 * panel reset.  Mirror that before the initial firmware download;
++	 * deferred rootfs-mount retries already waited 500ms on event_wq.
+ 	 */
+-	msleep(500);
++	if (!ts->fw_defer_retries)
++		msleep(500);
+ 
+ 	/*
+ 	 * The first prepare is the first time a follower may access the die;
+@@ -2070,10 +2076,26 @@ static int32_t nvt_ts_resume(struct device *dev)
+ 		ret = nvt_update_firmware_no_eng_reset(ts->fw_name);
+ 	else
+ 		ret = nvt_update_firmware(ts->fw_name);
++	if (ret == -ENOENT && ts->fw_defer_retries < 30 &&
++	    (!ts->is_panel_follower || nvt_panel_is_on(ts))) {
++		ts->fw_defer_retries++;
++		nvt_set_touch_awake_state(ts, false);
++		ts->ic_state = NVT_IC_SUSPEND_OUT;
++		NVT_LOG("deferring firmware load (%u/30) until rootfs mounts\n",
++			ts->fw_defer_retries);
++		mutex_unlock(&ts->lock);
++		if (hold_wake)
++			pm_relax(dev);
++		if (ts->event_wq && (!ts->is_panel_follower || nvt_panel_is_on(ts)))
++			queue_delayed_work(ts->event_wq, &ts->resume_work,
++					   msecs_to_jiffies(500));
++		return -EAGAIN;
++	}
+ 	if (ret) {
+ 		NVT_ERR("download firmware failed: %d\n", ret);
+ 		goto resume_fail;
+ 	}
++	ts->fw_defer_retries = 0;
+ 
+ 	/*
+ 	 * No RESET_STATE_REK wait here: the vendor resume path considers the
+@@ -2143,7 +2165,7 @@ static int32_t nvt_ts_resume(struct device *dev)
+ static int nvt_pm_suspend(struct device *dev)
+ {
+ 	/* Finish firmware I/O before the SPI controller suspends. */
+-	flush_work(&ts->resume_work);
++	flush_delayed_work(&ts->resume_work);
+ 	if (READ_ONCE(ts->touch_awake) && !ts->db_wakeup)
+ 		nvt_ts_suspend(dev);
+ 
+@@ -2168,7 +2190,7 @@ static int nvt_pm_resume(struct device *dev)
+ 
+ 	/* A panel that stayed prepared will not send another prepare callback. */
+ 	if (nvt_panel_resume_allowed(ts))
+-		queue_work(ts->event_wq, &ts->resume_work);
++		queue_delayed_work(ts->event_wq, &ts->resume_work, 0);
+ 
+ 	return 0;
+ }
+@@ -2187,13 +2209,14 @@ static int panel_prepared(struct drm_panel_follower *follower)
+ 
+ 	spin_lock_irqsave(&ts->lifecycle_lock, flags);
+ 	ts->panel_on = true;
++	ts->fw_defer_retries = 0;
+ 	queue_resume = ts->resources_ready && !ts->stopping;
+ 	spin_unlock_irqrestore(&ts->lifecycle_lock, flags);
+ 
+ 	NVT_LOG("panel prepared\n");
+ 
+ 	if (queue_resume)
+-		queue_work(ts->event_wq, &ts->resume_work);
++		queue_delayed_work(ts->event_wq, &ts->resume_work, 0);
+ 
+ 	return 0;
+ }
+@@ -2207,6 +2230,7 @@ static int panel_unpreparing(struct drm_panel_follower *follower)
+ 
+ 	spin_lock_irqsave(&ts->lifecycle_lock, flags);
+ 	ts->panel_on = false;
++	ts->fw_defer_retries = 0;
+ 	resources_ready = ts->resources_ready;
+ 	spin_unlock_irqrestore(&ts->lifecycle_lock, flags);
+ 
+@@ -2214,7 +2238,7 @@ static int panel_unpreparing(struct drm_panel_follower *follower)
+ 
+ 	/* The callback is the barrier before the panel's physical reset. */
+ 	if (ts->event_wq)
+-		cancel_work_sync(&ts->resume_work);
++		cancel_delayed_work_sync(&ts->resume_work);
+ 
+ 	if (!resources_ready)
+ 		return 0;
+diff --git a/drivers/input/touchscreen/nt36536/nt36536.h b/drivers/input/touchscreen/nt36536/nt36536.h
+index ebad44bc909..c25c86559ec 100644
+--- a/drivers/input/touchscreen/nt36536/nt36536.h
++++ b/drivers/input/touchscreen/nt36536/nt36536.h
+@@ -30,7 +30,7 @@
+ 
+ #include "nt36536_mem_map.h"
+ 
+-#define NVT_DEBUG 1
++#define NVT_DEBUG 0
+ 
+ //---INT trigger mode, used when the DT irq specifier carries no type---
+ #define INT_TRIGGER_TYPE IRQ_TYPE_EDGE_FALLING
+@@ -40,9 +40,11 @@
+ #define NVT_SPI_NAME "nt36536"
+ 
+ #if NVT_DEBUG
+-#define NVT_LOG(fmt, args...)    pr_err("[%s] %s %d: " fmt, NVT_SPI_NAME, __func__, __LINE__, ##args)
++#define NVT_LOG(fmt, args...) \
++	pr_info("[%s] %s %d: " fmt, NVT_SPI_NAME, __func__, __LINE__, ##args)
+ #else
+-#define NVT_LOG(fmt, args...)    pr_info("[%s] %s %d: " fmt, NVT_SPI_NAME, __func__, __LINE__, ##args)
++#define NVT_LOG(fmt, args...) \
++	pr_debug("[%s] %s %d: " fmt, NVT_SPI_NAME, __func__, __LINE__, ##args)
+ #endif
+ #define NVT_ERR(fmt, args...)    pr_err("[%s] %s %d: " fmt, NVT_SPI_NAME, __func__, __LINE__, ##args)
+ #define NVT_ERR_ONCE(fmt, args...) \
+@@ -163,6 +165,7 @@ struct nvt_ts_data {
+ 	u32 eng_reset_count;
+ 	u32 resume_count;
+ 	u32 firmware_update_count;
++	u32 fw_defer_retries;
+ 	uint8_t report_format;
+ 	bool pen_support;
+ 	uint8_t x_gang_num;
+@@ -173,7 +176,7 @@ struct nvt_ts_data {
+ 	bool pen_scan;
+ 	int8_t pen_phys[32];
+ 	struct workqueue_struct *event_wq;
+-	struct work_struct resume_work;
++	struct delayed_work resume_work;
+ 	int db_wakeup;
+ 	bool dev_pm_suspend;
+ 	struct completion dev_pm_suspend_completion;
+@@ -237,6 +240,7 @@ void nvt_fw_crc_enable(void);
+ void nvt_tx_auto_copy_mode(void);
+ int32_t nvt_update_firmware(const char *firmware_name);
+ int32_t nvt_update_firmware_no_eng_reset(const char *firmware_name);
++void nvt_fw_cache_release(void);
+ void Boot_Update_Firmware(struct work_struct *work);
+ int32_t nvt_check_fw_reset_state(RST_COMPLETE_STATE check_reset_state);
+ int32_t nvt_get_fw_info(void);
+diff --git a/drivers/input/touchscreen/nt36536/nt36536_fw_update.c b/drivers/input/touchscreen/nt36536/nt36536_fw_update.c
+index d210f7d29ff..c1e364aec41 100644
+--- a/drivers/input/touchscreen/nt36536/nt36536_fw_update.c
++++ b/drivers/input/touchscreen/nt36536/nt36536_fw_update.c
+@@ -17,6 +17,9 @@
+  */
+ 
+ #include <linux/firmware.h>
++#include <linux/mm.h>
++#include <linux/slab.h>
++#include <linux/string.h>
+ 
+ #include "nt36536.h"
+ 
+@@ -40,6 +43,10 @@ struct nvt_ts_bin_map {
+ };
+ 
+ static struct nvt_ts_bin_map *bin_map;
++static u8 *cached_fw_data;
++static size_t cached_fw_size;
++static char cached_fw_name[128];
++static struct firmware cached_fw_entry;
+ 
+ static int32_t nvt_get_fw_need_write_size(const struct firmware *fw_entry)
+ {
+@@ -144,7 +151,7 @@ static int32_t nvt_check_bin_checksum(const u8 *fwdata, size_t fwsize)
+ 
+ 	checksum_bin = byte_to_word(&fwdata[fwsize - 4]);
+ 	if (checksum != checksum_bin) {
+-		NVT_ERR("checksum_calculated = 0x%08X, checksum_bin = 0x%08X, use still\n",
++		NVT_LOG("checksum_calculated = 0x%08X, checksum_bin = 0x%08X, use still\n",
+ 			checksum, checksum_bin);
+ 		return -EINVAL;
+ 	}
+@@ -357,13 +364,27 @@ static int32_t nvt_bin_header_parser(const u8 *fwdata, size_t fwsize)
+ *******************************************************/
+ static void update_firmware_release(void)
+ {
+-	if (fw_entry) {
++	if (fw_entry && fw_entry != &cached_fw_entry)
+ 		release_firmware(fw_entry);
+-	}
+ 
+ 	fw_entry = NULL;
+ }
+ 
++void nvt_fw_cache_release(void)
++{
++	update_firmware_release();
++	if (!IS_ERR_OR_NULL(bin_map)) {
++		kfree(bin_map);
++		bin_map = NULL;
++	}
++	kvfree(cached_fw_data);
++	cached_fw_data = NULL;
++	cached_fw_size = 0;
++	cached_fw_name[0] = '\0';
++	kfree(fwbuf);
++	fwbuf = NULL;
++}
++
+ /*******************************************************
+ Description:
+ 	Novatek touchscreen request update firmware function.
+@@ -376,14 +397,32 @@ static int32_t update_firmware_request(const char *filename)
+ 	uint8_t retry = 0;
+ 	int32_t ret = 0;
+ 
+-	if (NULL == filename) {
++	if (!filename)
+ 		return -ENOENT;
++
++	if (cached_fw_data && !IS_ERR_OR_NULL(bin_map) &&
++	    !strcmp(cached_fw_name, filename)) {
++		fw_entry = &cached_fw_entry;
++		return 0;
+ 	}
+ 
++	if (!IS_ERR_OR_NULL(bin_map)) {
++		kfree(bin_map);
++		bin_map = NULL;
++	}
++	kvfree(cached_fw_data);
++	cached_fw_data = NULL;
++	cached_fw_size = 0;
++	cached_fw_name[0] = '\0';
++
+ 	while (1) {
+ 		NVT_LOG("filename is %s\n", filename);
+ 
+-		ret = request_firmware(&fw_entry, filename, &ts->client->dev);
++		ret = firmware_request_nowarn(&fw_entry, filename, &ts->client->dev);
++		if (ret == -ENOENT) {
++			NVT_LOG("firmware %s not available yet, ret=%d\n", filename, ret);
++			break;
++		}
+ 		if (ret) {
+ 			NVT_ERR("firmware load failed, ret=%d\n", ret);
+ 			goto request_fail;
+@@ -412,10 +451,20 @@ static int32_t update_firmware_request(const char *filename)
+ 		if (ret) {
+ 			NVT_ERR("bin header parser failed\n");
+ 			goto invalid;
+-		} else {
+-			break;
+ 		}
+ 
++		cached_fw_data = kvmalloc(fw_entry->size, GFP_KERNEL);
++		if (cached_fw_data) {
++			memcpy(cached_fw_data, fw_entry->data, fw_entry->size);
++			cached_fw_size = fw_entry->size;
++			strscpy(cached_fw_name, filename, sizeof(cached_fw_name));
++			cached_fw_entry.data = cached_fw_data;
++			cached_fw_entry.size = cached_fw_size;
++			release_firmware(fw_entry);
++			fw_entry = &cached_fw_entry;
++		}
++		break;
++
+ invalid:
+ 		update_firmware_release();
+ 		if (!IS_ERR_OR_NULL(bin_map)) {
+@@ -985,7 +1034,10 @@ int32_t nvt_update_firmware(const char *firmware_name)
+ 	// request bin file in "/etc/firmware"
+ 	ret = update_firmware_request(firmware_name);
+ 	if (ret) {
+-		NVT_ERR("update_firmware_request failed. (%d)\n", ret);
++		if (ret == -ENOENT)
++			NVT_LOG("update_firmware_request deferred (%d)\n", ret);
++		else
++			NVT_ERR("update_firmware_request failed. (%d)\n", ret);
+ 		goto request_firmware_fail;
+ 	}
+ 
+@@ -1016,7 +1068,7 @@ int32_t nvt_update_firmware(const char *firmware_name)
+ 	}
+ 
+ download_fail:
+-	if (!IS_ERR_OR_NULL(bin_map)) {
++	if (!cached_fw_data && !IS_ERR_OR_NULL(bin_map)) {
+ 		kfree(bin_map);
+ 		bin_map = NULL;
+ 	}
+diff --git a/drivers/media/platform/qcom/camss/camss.c b/drivers/media/platform/qcom/camss/camss.c
+index 5ae4dea2f6a..3d0cc472823 100644
+--- a/drivers/media/platform/qcom/camss/camss.c
++++ b/drivers/media/platform/qcom/camss/camss.c
+@@ -5380,11 +5380,9 @@ static int camss_init_subdevices(struct camss *camss)
+ 							    res->csiphy_res[i].csiphy.id);
+ 		}
+ 
+-		if (ret < 0) {
+-			dev_err(camss->dev, "csiphy %d init fail\n",
+-				res->csiphy_res[i].csiphy.id);
+-			return ret;
+-		}
++		if (ret < 0)
++			return dev_err_probe(camss->dev, ret, "csiphy %d init fail\n",
++					     res->csiphy_res[i].csiphy.id);
+ 	}
+ 
+ 	if (camss->tpg) {
+diff --git a/drivers/power/supply/qcom_battmgr.c b/drivers/power/supply/qcom_battmgr.c
+index 24bc3affc73..526db70070e 100644
+--- a/drivers/power/supply/qcom_battmgr.c
++++ b/drivers/power/supply/qcom_battmgr.c
+@@ -4294,6 +4294,7 @@ static const struct of_device_id qcom_battmgr_of_quirks[] = {
+ 		.compatible = "lenovo,tb378fc-pmic-glink",
+ 		.data = (void *)(QCOM_BATTMGR_QUIRK_NO_BATT_POWER_NOW |
+ 				 QCOM_BATTMGR_QUIRK_BATT_CURRENT_INVERTED |
++				 QCOM_BATTMGR_QUIRK_NO_CHARGE_CONTROL |
+ 				 QCOM_BATTMGR_QUIRK_NATIVE_USB_ICL),
+ 	},
+ 	{
+diff --git a/drivers/soundwire/qcom.c b/drivers/soundwire/qcom.c
+index 5eeef8ba262..2ef80efe2e1 100644
+--- a/drivers/soundwire/qcom.c
++++ b/drivers/soundwire/qcom.c
+@@ -1513,7 +1513,7 @@ static int qcom_swrm_get_port_config(struct qcom_swrm_ctrl *ctrl)
+ 	ret = of_property_read_u32(np, "qcom,din-ports", &val);
+ 	if (!ret) { /* only if present */
+ 		if (val != ctrl->num_din_ports) {
+-			dev_err(ctrl->dev, "din-ports (%d) mismatch with controller (%d)",
++			dev_dbg(ctrl->dev, "din-ports (%d) mismatch with controller (%d)\n",
+ 				val, ctrl->num_din_ports);
+ 		}
+ 
+@@ -1523,7 +1523,7 @@ static int qcom_swrm_get_port_config(struct qcom_swrm_ctrl *ctrl)
+ 	ret = of_property_read_u32(np, "qcom,dout-ports", &val);
+ 	if (!ret) { /* only if present */
+ 		if (val != ctrl->num_dout_ports) {
+-			dev_err(ctrl->dev, "dout-ports (%d) mismatch with controller (%d)",
++			dev_dbg(ctrl->dev, "dout-ports (%d) mismatch with controller (%d)\n",
+ 				val, ctrl->num_dout_ports);
+ 		}
+ 
+diff --git a/kernel/sched/cpufreq_schedutil.c b/kernel/sched/cpufreq_schedutil.c
+index 14405a61499..ea7476fa8fe 100644
+--- a/kernel/sched/cpufreq_schedutil.c
++++ b/kernel/sched/cpufreq_schedutil.c
+@@ -179,8 +179,11 @@ unsigned long get_capacity_ref_freq(struct cpufreq_policy *policy)
+ {
+ 	unsigned int freq = arch_scale_freq_ref(policy->cpu);
+ 
+-	if (freq)
++	if (freq) {
++		if (policy->boost_enabled && policy->max > freq)
++			return min(policy->cpuinfo.max_freq, policy->max);
+ 		return freq;
++	}
+ 
+ 	if (arch_scale_freq_invariant())
+ 		return policy->cpuinfo.max_freq;
+-- 
+2.43.0
+

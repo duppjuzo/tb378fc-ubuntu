@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.6.6 — 2026-11-24
+
+### 联想原厂磁吸触点键盘与多指触控板内核支持（补丁 `0015`）
+- **半双工 `qcom_geni_serial` 与 `lenovo_pogo_keyboard` 净室主线驱动（`CONFIG_KEYBOARD_LENOVO_POGO=y`）**：
+  - 为 `drivers/tty/serial/qcom_geni_serial.c` 增加可选半双工 `tx-en-gpios`（`gpio29`）与 `qcom,tx-en-delay-us = <450>` 发送前建立延时及发送完成立即切回 RX 支持，并通过 `dt-schema` 校验。
+  - 新增 `drivers/input/keyboard/lenovo_pogo_keyboard.c`（`serdev` 驱动，挂载于 `0xa88000` `QUPv3 WRAP1 SE2` @ `921600 8N1`），完整实现 PPP 转义帧解析、64 字节旋转 XOR 解扰、6KRO 标准按键、多媒体/背光快捷键、4 指 `INPUT_MT_POINTER` 触控板（含 `input_mt_sync_frame()` 指针仿真与防误触）、Caps/Mute/MicMute/FnLock 指示灯双向同步、霍尔热插拔（`gpio31`）、供电开关（`gpio81`）、唤醒中断（`gpio87`）及 `drm_panel_follower` 联动；同时严守板级隔离红线，保持 `CONFIG_KEYBOARD_ONEPLUS_POGO` 禁用。
+  - *验证状态*：离线协议单测、`checkpatch.pl`、`dt-doc-validate` 与内核 `-Werror` 编译全部通过；真机（未吸附键盘状态）已验证 `ttyHS1`、霍尔/唤醒中断（`IRQ 210/211`）、sysfs 属性与断电休眠逻辑正常，物理磁吸键盘实机输入联调待后续合入验证记录。
+
+### 冷启动触控修复、外接 5K DP 拔线防死机与 Oryon 4.32 GHz 睿频（补丁 `0014`）
+- **修复冷启动偶发触摸失灵（无需息屏重亮）**：将 `nt36536` 的 `panel_follower` 唤醒固件加载改造为 `delayed_work` + `firmware_request_nowarn()`，在早期 initramfs 尚未挂载根分区 `/lib/firmware/novatek/tb378fc.bin` 时自动按 500 ms 延迟重试直至 rootfs 就绪，并在内存中缓存已解析固件避免后续亮屏重复读盘校验；真机冷重启验证 `0` 报错、进桌面即刻响应触控。
+- **修复外接 5K/4-lane DisplayPort 显示器热拔插重启**：在 `&usb` 节点补齐 `mode-switch;`，使 4-lane DP Alt Mode 拔出时 DWC3 先切回 UTMI 时钟再关闭 QMP `pipe_clk`，消除 xHCI/DWC3 挂死引发看门狗重启；为 `msm_dp_audio_shutdown()` 增加掉电状态守卫，并禁用未使用的 `tn@109ab000`。
+- **解锁原生 `schedutil` 4.20 / 4.32 GHz Oryon Prime 睿频**：修正 `schedutil` 在 `boost_enabled` 激活且 `policy->max` 高于持续基准频率时的利用率映射上限，配合三档 `tb378fc-thermal-guard`（省电 3.53 GHz / 平衡与性能自动睿频至 **4.32 GHz**）实机达成满血单核睿频。
+- **内核日志降噪与 PMIC/音频细节打磨**：静默 `btqca` 可选固件探测告警、为 `lenovo,tb378fc-pmic-glink` 标记 `QCOM_BATTMGR_QUIRK_NO_CHARGE_CONTROL` 消除不支持的 `0x48` 报错，并补齐 `wcd939x` MBHC 阈值与 `lpass_vamacro` 采样率属性。
+
+### GNOME 50 多窗口 / Chrome 触控屏幕键盘与全栈桌面优化（`0.6.6`）
+- **彻底修复 GNOME 50 多窗口与 Chrome/Chromium 触屏无法呼出屏幕键盘（OSK）**：
+  - 重写 `packaging/device-support/tree/usr/local/share/tb378fc/gnome-shell/ui/keyboard.js` 触控焦点追踪：同时在 `global.stage` 与 `Main.uiGroup` 捕获触屏轻点事件（覆盖位于 `global.window_group` 的普通桌面客户端窗口），兼容单次 `zwp_text_input_v3.enable()` 会话模型，并修复连接蓝牙键鼠外设时触屏点击仍可自动弹出虚拟键盘。
+  - 在 `/etc/chromium.d/tb378fc-wayland-vaapi` 与新增 `/usr/local/libexec/tb378fc-sync-chrome-vaapi`（含 APT `DPkg::Post-Invoke` 钩子）自动注入 `--enable-wayland-ime --wayland-text-input-version=3`，使 Google Chrome / Chromium 原生走 Wayland Text Input v3 协议唤醒虚拟键盘。
+- **启动提速、存储/内存调优、蓝牙高清音频与 Iris VA-API 更新**：
+  - `tools/build-initramfs.sh` 精简早期 initramfs 固件（仅保留 `regulatory.db*`），避免根分区挂载前 Adreno 830 提前抢跑触发约 5 秒 GMU OOB 超时。
+  - 新增 `tb378fc-hw-init` UFS 4.0 MCQ 队列与缓存调优、`90-tb378fc-mglru.conf`、4 GiB `zstd` zram 与 `90-tb378fc-vm.conf` 低延迟内存回收策略。
+  - 新增 WirePlumber `51-tb378fc-bluetooth.conf`（优先启用 AAC / LDAC / SBC-XQ 高码率蓝牙音频）与 `CONFIG_BT_AOSPEXT=y`；`tb378fc-iris-vaapi` 升级至 `0.4.0+git.4125b11-4`（新增 `0007` Chromium VA-API 编码兼容补丁）；合入 `sm8750-waydroid.config` 内核配置片段与国内 NTP 源兜底。
+
 ## 0.6.5 — 2026-11-23
 
 ### 标准通用一键刷机包与跨平台全流程向导

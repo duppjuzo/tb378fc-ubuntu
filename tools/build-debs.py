@@ -114,17 +114,27 @@ def build_device_support(version: str, out_dir: Path) -> Path:
             '            [ -n "$u" ] && usermod -aG video,render "$u" 2>/dev/null || true\n'
             "        done\n"
             "    fi\n"
+            "    if [ -f /etc/default/keyboard ]; then\n"
+            "        sed -i -E 's/^XKBLAYOUT=\"default,([^\"]+)\"/XKBLAYOUT=\"\\1\"/; s/^XKBLAYOUT=\"([^\"]+),(default)\"/XKBLAYOUT=\"\\1\"/; s/^XKBLAYOUT=\"default\"/XKBLAYOUT=\"us\"/; s/^XKBVARIANT=\",([^\"]*)\"/XKBVARIANT=\"\\1\"/' /etc/default/keyboard 2>/dev/null || true\n"
+            "    fi\n"
+            "    if [ -f /etc/default/kdump-tools ]; then\n"
+            "        sed -i 's/^USE_KDUMP=1/USE_KDUMP=0/' /etc/default/kdump-tools 2>/dev/null || true\n"
+            "    fi\n"
+            "    systemctl mask systemd-networkd-wait-online.service >/dev/null 2>&1 || true\n"
+            "    systemctl disable systemd-networkd.service systemd-networkd.socket networkd-dispatcher.service NetworkManager-wait-online.service chrony-wait.service ModemManager.service spice-vdagentd.service spice-vdagentd.socket rsyslog.service syslog.socket kdump-tools.service cups.service cups.socket cups.path cups-browsed.service speech-dispatcherd.service avahi-daemon.service avahi-daemon.socket >/dev/null 2>&1 || true\n"
             "    if [ -d /run/systemd/system ]; then\n"
             "        systemctl daemon-reload || true\n"
+            "        systemd-tmpfiles --create /etc/tmpfiles.d/90-tb378fc-mglru.conf >/dev/null 2>&1 || true\n"
             "        udevadm control --reload-rules || true\n"
             "        udevadm trigger --subsystem-match=dma_heap --subsystem-match=media --subsystem-match=video4linux --subsystem-match=block || true\n"
             "        sysctl -p /etc/sysctl.d/90-tb378fc-vm.conf >/dev/null 2>&1 || true\n"
             "        modprobe v4l2loopback 2>/dev/null || true\n"
+            "        [ -x /usr/local/sbin/tb378fc-hw-init ] && /usr/local/sbin/tb378fc-hw-init || true\n"
             "        systemctl enable fstrim.timer >/dev/null 2>&1 || true\n"
             "        systemctl try-restart systemd-journald.service systemd-oomd.service >/dev/null 2>&1 || true\n"
             "        systemctl restart tb378fc-thermal-guard.service || true\n"
             "        update-desktop-database /usr/local/share/applications >/dev/null 2>&1 || true\n"
-            "    fi\n"
+            "    fi\n" 
             "fi\n"
             "exit 0\n"
         )
@@ -213,10 +223,11 @@ def build_audio(version: str, out_dir: Path) -> Path:
                 "Priority": "optional",
                 "Maintainer": MAINTAINER,
                 "Depends": "alsa-ucm-conf, python3, python3-gi",
-                "Recommends": "pipewire-bin, wireplumber",
-                "Description": "Lenovo TB378FC AudioReach topology, ALSA UCM2, and quad-speaker rotation\n"
+                "Recommends": "pipewire-bin, wireplumber, libspa-0.2-bluetooth, libspa-0.2-modules-extra, libfdk-aac2",
+                "Description": "Lenovo TB378FC AudioReach topology, ALSA UCM2, speaker rotation, and Bluetooth codecs\n"
                 " Provides compiled Lenovo-TB378FC-tplg.bin, ALSA UCM2 profiles for quad\n"
-                " AW88480 speakers + dual WCD9390 microphones, and PipeWire speaker rotation.",
+                " AW88480 speakers + dual WCD9390 microphones, PipeWire speaker rotation,\n"
+                " and WirePlumber Bluetooth A2DP (AAC/LDAC/aptX/SBC-XQ) & wideband HFP policy.",
             },
         )
         return pack_deb(stage, out_dir / f"tb378fc-audio_{version}_arm64.deb")
@@ -243,6 +254,8 @@ def build_kernel_deb(kernel_out: Path, version: str, out_dir: Path) -> tuple[Pat
             dtb_dir / "sm8750-lenovo-tb378fc.dtb",
         )
 
+        strip_bin = shutil.which("aarch64-linux-gnu-strip") or shutil.which("llvm-strip")
+        staged_kos: list[Path] = []
         mod_root = stage / "lib/modules" / krel
         kernel_mod_dir = mod_root / "kernel"
         for rel_ko in sorted(result["modules"]):
@@ -250,6 +263,7 @@ def build_kernel_deb(kernel_out: Path, version: str, out_dir: Path) -> tuple[Pat
             dst_ko = kernel_mod_dir / rel_ko
             dst_ko.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(src_ko, dst_ko)
+            staged_kos.append(dst_ko)
 
         for rel_extra in sorted(result.get("extra_modules", {})):
             src_extra = kernel_out / "extra-modules" / Path(rel_extra).name
@@ -258,6 +272,12 @@ def build_kernel_deb(kernel_out: Path, version: str, out_dir: Path) -> tuple[Pat
             dst_extra = mod_root / rel_extra
             dst_extra.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(src_extra, dst_extra)
+            staged_kos.append(dst_extra)
+
+        # Strip bulky DWARF .debug_* sections while preserving compact .BTF & symbol tables
+        if strip_bin and staged_kos:
+            for i in range(0, len(staged_kos), 128):
+                subprocess.run([strip_bin, "--strip-debug", *map(str, staged_kos[i : i + 128])], check=True)
 
         for meta in ("modules.order", "modules.builtin", "modules.builtin.modinfo"):
             src_m = kernel_out / meta

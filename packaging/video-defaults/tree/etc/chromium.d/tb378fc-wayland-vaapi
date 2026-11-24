@@ -1,3 +1,3 @@
 # SPDX-License-Identifier: GPL-2.0-only
-# Enable native Wayland (Ozone) and Qualcomm Iris VA-API hardware video decoding on TB378FC.
-export CHROMIUM_FLAGS="${CHROMIUM_FLAGS:-} --ozone-platform-hint=auto --enable-features=VaapiVideoDecodeLinuxGL,VaapiIgnoreDriverChecks"
+# Enable native Wayland (Ozone + zwp_text_input_v3 IME/OSK) and Qualcomm Iris VA-API hardware video decode & encode on TB378FC.
+export CHROMIUM_FLAGS="${CHROMIUM_FLAGS:-} --ozone-platform-hint=auto --enable-wayland-ime --wayland-text-input-version=3 --enable-features=AcceleratedVideoDecodeLinuxGL,AcceleratedVideoDecodeLinuxZeroCopyGL,VaapiVideoDecodeLinuxGL,AcceleratedVideoEncoder,VaapiIgnoreDriverChecks"

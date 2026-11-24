@@ -18,7 +18,9 @@ net.hadess.PowerProfiles on the system bus with all three native GNOME modes:
 import glob
 import os
 from pathlib import Path
+import shutil
 import signal
+import subprocess
 import sys
 import time
 import warnings
@@ -36,9 +38,9 @@ except ImportError:
 STATE_FILE = Path("/var/lib/tb378fc/power-profile")
 VALID_PROFILES = ("power-saver", "balanced", "performance")
 
-# Fallback OPP ceilings (dynamically snapped to sysfs available_frequencies at startup)
+# Fallback OPP ceilings (dynamically snapped to sysfs available + boost OPPs at startup)
 DEFAULT_MAX_P0 = 3_532_800
-DEFAULT_MAX_P6 = 4_089_600
+DEFAULT_MAX_P6 = 4_320_000
 DEFAULT_MAX_GPU = 1_100_000_000
 
 # Profile baseline configuration:
@@ -174,6 +176,53 @@ def read_opp_table(path: Path) -> list[int]:
         return vals
     except OSError:
         return []
+
+
+def read_policy_opps(policy_dir: Path) -> list[int]:
+    """Return sorted union of scaling_available_frequencies and scaling_boost_frequencies."""
+    opps = set(read_opp_table(policy_dir / "scaling_available_frequencies"))
+    opps.update(read_opp_table(policy_dir / "scaling_boost_frequencies"))
+    return sorted(opps)
+
+
+def read_ac_online(
+    usb_psy_dir: Path = Path("/sys/class/power_supply/qcom-battmgr-usb"),
+    bat_psy_dir: Path = Path("/sys/class/power_supply/qcom-battmgr-bat"),
+) -> bool | None:
+    """Return True when external USB/AC power is online, False on battery, or None if unavailable."""
+    online = read_int(usb_psy_dir / "online")
+    if online is not None:
+        return online > 0
+    try:
+        status = (bat_psy_dir / "status").read_text(encoding="utf-8").strip()
+    except OSError:
+        return None
+    if status in ("Charging", "Full", "Not charging"):
+        return True
+    if status == "Discharging":
+        return False
+    return None
+
+
+def sync_wifi_power_save(enable_ps: bool, net_root: Path = Path("/sys/class/net")) -> int:
+    """Toggle 802.11 power_save across dynamic wireless interfaces (e.g. wlp1s0, never hardcoded wlan0)."""
+    iw_bin = shutil.which("iw")
+    if not iw_bin or not net_root.is_dir():
+        return 0
+    mode = "on" if enable_ps else "off"
+    updated = 0
+    for iface_dir in sorted(net_root.iterdir()):
+        if not (iface_dir / "wireless").is_dir():
+            continue
+        res = subprocess.run(
+            [iw_bin, "dev", iface_dir.name, "set", "power_save", mode],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False,
+        )
+        if res.returncode == 0:
+            updated += 1
+    return updated
 
 
 def snap_opp(target: int, opps: list[int]) -> int:
@@ -363,6 +412,25 @@ class ProfileState:
             self.holds.pop(c, None)
         return released
 
+    def apply_power_source(self, ac_online: bool) -> bool:
+        """Auto-switch base profile on AC/battery transitions when battery_aware is enabled.
+        - Plugged in (AC online): promote base profile to 'performance'.
+        - Unplugged (on battery): step down 'performance' -> 'balanced', preserving manual 'power-saver'.
+        """
+        if not self.battery_aware:
+            return False
+        if ac_online:
+            if self.base_profile != "performance":
+                self.base_profile = "performance"
+                self._save_base_profile("performance")
+                return True
+            return False
+        if self.base_profile == "performance":
+            self.base_profile = "balanced"
+            self._save_base_profile("balanced")
+            return True
+        return False
+
 
 def _enable_cpuset_subtree(cgroup_dir: Path) -> None:
     ctrl = cgroup_dir / "cgroup.controllers"
@@ -402,12 +470,13 @@ class ThermalGuardDaemon:
         self.power_ctrl = PowerCapController()
         self.media_det = IrisMediaDetector()
 
+        self.boost_path = Path("/sys/devices/system/cpu/cpufreq/boost")
         self.p0_max_path = Path("/sys/devices/system/cpu/cpufreq/policy0/scaling_max_freq")
         self.p6_max_path = Path("/sys/devices/system/cpu/cpufreq/policy6/scaling_max_freq")
         self.gpu_max_path = Path("/sys/class/devfreq/3d00000.gpu/max_freq")
 
-        self.p0_opps = read_opp_table(Path("/sys/devices/system/cpu/cpufreq/policy0/scaling_available_frequencies"))
-        self.p6_opps = read_opp_table(Path("/sys/devices/system/cpu/cpufreq/policy6/scaling_available_frequencies"))
+        self.p0_opps = read_policy_opps(Path("/sys/devices/system/cpu/cpufreq/policy0"))
+        self.p6_opps = read_policy_opps(Path("/sys/devices/system/cpu/cpufreq/policy6"))
         self.gpu_opps = read_opp_table(Path("/sys/class/devfreq/3d00000.gpu/available_frequencies"))
 
         # Patch performance ceilings to exact hardware max OPP discovered at boot
@@ -421,7 +490,9 @@ class ThermalGuardDaemon:
         self.stage = 0
         self.last_profile: str | None = None
         self.last_passive_mc: int | None = None
-        self.last_applied: tuple[int, int, int, int] | None = None
+        self.last_applied: tuple[int, int, int, int, int] | None = None
+        self.last_ac_online: bool | None = None
+        self.last_wifi_ps: bool | None = None
         self.last_uclamp_profile: str | None = None
         self.last_uclamp_refresh = 0.0
         self.perf_degraded = ""
@@ -685,8 +756,27 @@ class ThermalGuardDaemon:
         )
 
     def tick(self) -> bool:
+        ac_online = read_ac_online()
+        if ac_online is not None and ac_online != self.last_ac_online:
+            old_active = self.state.active_profile
+            self.last_ac_online = ac_online
+            if self.state.apply_power_source(ac_online):
+                new_active = self.state.active_profile
+                print(
+                    f"tb378fc-thermal-guard: power source {'AC' if ac_online else 'battery'} -> base profile {self.state.base_profile}",
+                    flush=True,
+                )
+                if new_active != old_active and GLib is not None:
+                    self._emit_props_changed({"ActiveProfile": GLib.Variant("s", new_active)})
+
         profile = self.state.active_profile
         cfg = PROFILE_CONFIG[profile]
+
+        if ac_online is not None:
+            want_wifi_ps = (not ac_online) and (profile != "performance")
+            if want_wifi_ps != self.last_wifi_ps:
+                sync_wifi_power_save(want_wifi_ps)
+                self.last_wifi_ps = want_wifi_ps
 
         if profile != self.last_profile:
             self.stage = 0
@@ -743,17 +833,22 @@ class ThermalGuardDaemon:
         eff_p0 = snap_opp(eff_p0, self.p0_opps)
         eff_p6 = snap_opp(eff_p6, self.p6_opps)
         eff_gpu = snap_opp(eff_gpu, self.gpu_opps)
-        target = (eff_p0, eff_p6, eff_gpu, eff_rl)
+        eff_boost = 1 if profile == "performance" else 0
+        target = (eff_p0, eff_p6, eff_gpu, eff_rl, eff_boost)
 
         if target != self.last_applied:
+            if eff_boost and self.boost_path.exists():
+                write_sysfs(self.boost_path, "1")
             write_sysfs(self.p0_max_path, str(target[0]))
             write_sysfs(self.p6_max_path, str(target[1]))
+            if not eff_boost and self.boost_path.exists():
+                write_sysfs(self.boost_path, "0")
             if self.gpu_max_path.exists():
                 write_sysfs(self.gpu_max_path, str(target[2]))
             self._set_schedutil_rate_limit(target[3])
             print(
                 f"tb378fc-thermal-guard: applied policy0={target[0]}kHz "
-                f"policy6={target[1]}kHz gpu={target[2]}Hz rate_limit={target[3]}us "
+                f"policy6={target[1]}kHz gpu={target[2]}Hz rate_limit={target[3]}us boost={eff_boost} "
                 f"(profile={profile}, stage={self.stage}, temp={max_mc / 1000.0:.1f}C, media={int(media_active)}{pwr_info})",
                 flush=True,
             )
@@ -800,6 +895,8 @@ class ThermalGuardDaemon:
         bal = PROFILE_CONFIG["balanced"]["caps"]
         write_sysfs(self.p0_max_path, str(snap_opp(bal[0], self.p0_opps)))
         write_sysfs(self.p6_max_path, str(snap_opp(bal[1], self.p6_opps)))
+        if self.boost_path.exists():
+            write_sysfs(self.boost_path, "0")
         if self.gpu_max_path.exists():
             write_sysfs(self.gpu_max_path, str(snap_opp(bal[2], self.gpu_opps)))
 

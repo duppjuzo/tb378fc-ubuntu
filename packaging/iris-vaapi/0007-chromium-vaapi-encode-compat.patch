@@ -1,0 +1,253 @@
+From: TB378FC Maintainers <tb378fc@localhost>
+Subject: [PATCH] va, codec: support Chromium VaapiVideoEncodeAccelerator sticky CBR & hint buffers
+
+1. Accept and harmlessly ignore optional VA-API encode hint/packed/QP/matrix
+   buffers in createBuffer() and renderPicture() so clients never fail with
+   VA_STATUS_ERROR_UNSUPPORTED_BUFFERTYPE.
+2. Persist VAEncMiscParameterRateControl and VAEncMiscParameterFrameRate
+   across subsequent P-frames in H264Encoder and HevcEncoder (Chromium sets
+   sequence.bits_per_second = 0 and only submits RateControl on IDR or rate
+   changes, which previously failed "CBR needs a bitrate" on Frame 1).
+3. Honour VBR target_percentage (1..99) in VAEncMiscParameterRateControl.
+
+--- a/src/va/buffer.cc
++++ b/src/va/buffer.cc
+@@ -32,9 +32,16 @@
+     case VAEncSequenceParameterBufferType:
+     case VAEncPictureParameterBufferType:
+     case VAEncSliceParameterBufferType:
++    case VAQMatrixBufferType:
+     case VAEncMiscParameterBufferType:
+     case VAEncPackedHeaderParameterBufferType:
+     case VAEncPackedHeaderDataBufferType:
++    case VAEncMacroblockParameterBufferType:
++    case VAEncMacroblockMapBufferType:
++    case VAEncQPBufferType:
++    case VAEncMacroblockDisableSkipMapBufferType:
++    case VAContextParameterUpdateBufferType:
++    case VAEncDeltaQpPerBlockBufferType:
+     // The coded buffer's capacity is `size`; the bytes land in `payload`
+     // when vaEndPicture returns, and mapBuffer hands out the segment.
+     case VAEncCodedBufferType:
+--- a/src/va/picture.cc
++++ b/src/va/picture.cc
+@@ -380,10 +380,18 @@
+                     for (unsigned k = 0; k < b->count; ++k)
+                         c->enc_picture.slices.push_back(b->data.data() + static_cast<size_t>(k) * b->size);
+                     break;
++                case VAQMatrixBufferType:
+                 case VAEncPackedHeaderParameterBufferType:
+                 case VAEncPackedHeaderDataBufferType:
+-                    // Packed headers are not advertised. A client that
+-                    // sends them anyway must not lose the picture.
++                case VAEncMacroblockParameterBufferType:
++                case VAEncMacroblockMapBufferType:
++                case VAEncQPBufferType:
++                case VAEncMacroblockDisableSkipMapBufferType:
++                case VAContextParameterUpdateBufferType:
++                case VAEncDeltaQpPerBlockBufferType:
++                    // Packed headers and per-MB/ROI hints are not advertised.
++                    // Clients (e.g. Chromium VaapiVideoEncodeAccelerator) that
++                    // submit them anyway must not lose the picture.
+                     break;
+                 default:
+                     throw iris::Error(
+--- a/src/codec/encode_h264.cc
++++ b/src/codec/encode_h264.cc
+@@ -135,20 +135,39 @@
+         out.profile = profile_menu(profile_);
+         out.level = level_menu(sequence->level_idc);
+         out.rate_mode = rate_mode_;
+-        out.bitrate = sequence->bits_per_second;
++        out.bitrate = sequence->bits_per_second ? sequence->bits_per_second : last_misc_bitrate_;
++        out.min_qp = last_min_qp_;
++        out.max_qp = last_max_qp_;
++        out.frame_rate_num = last_fps_num_;
++        out.frame_rate_den = last_fps_den_;
+         out.gop_size = sequence->intra_period;
+         out.cabac = params->pic_fields.bits.entropy_coding_mode_flag != 0;
+         out.keyframe = params->pic_fields.bits.idr_pic_flag != 0;
+         out.reconstruction = params->CurrPic.picture_id;
++        uint32_t vbr_peak = last_vbr_peak_;
+ 
+         if (const auto* rate = static_cast<const VAEncMiscParameterRateControl*>(
+                 find_misc(picture.misc, VAEncMiscParameterTypeRateControl))) {
+-            if (rate->bits_per_second)
+-                out.bitrate = rate->bits_per_second;
+-            if (rate->min_qp)
++            if (rate->bits_per_second) {
++                if (rate_mode_ == RateMode::Vbr && rate->target_percentage > 0 && rate->target_percentage < 100) {
++                    vbr_peak = rate->bits_per_second;
++                    out.bitrate = static_cast<uint32_t>(
++                        std::max<uint64_t>(1, (uint64_t(rate->bits_per_second) * rate->target_percentage) / 100));
++                } else {
++                    vbr_peak = 0;
++                    out.bitrate = rate->bits_per_second;
++                }
++                last_misc_bitrate_ = out.bitrate;
++                last_vbr_peak_ = vbr_peak;
++            }
++            if (rate->min_qp) {
+                 out.min_qp = rate->min_qp;
+-            if (rate->max_qp)
++                last_min_qp_ = rate->min_qp;
++            }
++            if (rate->max_qp) {
+                 out.max_qp = rate->max_qp;
++                last_max_qp_ = rate->max_qp;
++            }
+         }
+         if (const auto* frame = static_cast<const VAEncMiscParameterFrameRate*>(
+                 find_misc(picture.misc, VAEncMiscParameterTypeFrameRate))) {
+@@ -157,6 +176,8 @@
+             if (num && den) {
+                 out.frame_rate_num = num;
+                 out.frame_rate_den = den;
++                last_fps_num_ = num;
++                last_fps_den_ = den;
+             }
+         }
+         const VAEncSliceParameterBufferH264* slice = picture.slices.empty()
+@@ -236,7 +257,7 @@
+         }
+         require(params->pic_fields.bits.reference_pic_flag != 0,
+             "non-reference pictures are not supported", VA_STATUS_ERROR_UNIMPLEMENTED);
+-        out.peak_bitrate = out.rate_mode == RateMode::Cbr ? out.bitrate : 0;
++        out.peak_bitrate = out.rate_mode == RateMode::Cbr ? out.bitrate : vbr_peak;
+         require(out.rate_mode != RateMode::Cbr || out.bitrate > 0, "CBR needs a bitrate",
+             VA_STATUS_ERROR_INVALID_PARAMETER);
+         // CQP has no bitrate: the picture QP is what the bitstream carries,
+@@ -255,6 +276,12 @@
+ private:
+     VAProfile profile_;
+     RateMode rate_mode_;
++    uint32_t last_misc_bitrate_ = 0;
++    uint32_t last_vbr_peak_ = 0;
++    int last_min_qp_ = -1;
++    int last_max_qp_ = -1;
++    unsigned last_fps_num_ = 30;
++    unsigned last_fps_den_ = 1;
+ };
+ 
+ } // namespace
+--- a/src/codec/encode_hevc.cc
++++ b/src/codec/encode_hevc.cc
+@@ -112,18 +112,37 @@
+         out.profile = V4L2_MPEG_VIDEO_HEVC_PROFILE_MAIN;
+         out.level = level_menu(sequence->general_level_idc);
+         out.rate_mode = rate_mode_;
+-        out.bitrate = sequence->bits_per_second;
++        out.bitrate = sequence->bits_per_second ? sequence->bits_per_second : last_misc_bitrate_;
++        out.min_qp = last_min_qp_;
++        out.max_qp = last_max_qp_;
++        out.frame_rate_num = last_fps_num_;
++        out.frame_rate_den = last_fps_den_;
+         out.gop_size = sequence->intra_period;
+         out.cabac = true;
++        uint32_t vbr_peak = last_vbr_peak_;
+ 
+         if (const auto* rate = static_cast<const VAEncMiscParameterRateControl*>(
+                 find_misc(picture.misc, VAEncMiscParameterTypeRateControl))) {
+-            if (rate->bits_per_second)
+-                out.bitrate = rate->bits_per_second;
+-            if (rate->min_qp)
++            if (rate->bits_per_second) {
++                if (rate_mode_ == RateMode::Vbr && rate->target_percentage > 0 && rate->target_percentage < 100) {
++                    vbr_peak = rate->bits_per_second;
++                    out.bitrate = static_cast<uint32_t>(
++                        std::max<uint64_t>(1, (uint64_t(rate->bits_per_second) * rate->target_percentage) / 100));
++                } else {
++                    vbr_peak = 0;
++                    out.bitrate = rate->bits_per_second;
++                }
++                last_misc_bitrate_ = out.bitrate;
++                last_vbr_peak_ = vbr_peak;
++            }
++            if (rate->min_qp) {
+                 out.min_qp = rate->min_qp;
+-            if (rate->max_qp)
++                last_min_qp_ = rate->min_qp;
++            }
++            if (rate->max_qp) {
+                 out.max_qp = rate->max_qp;
++                last_max_qp_ = rate->max_qp;
++            }
+         }
+         if (const auto* frame = static_cast<const VAEncMiscParameterFrameRate*>(
+                 find_misc(picture.misc, VAEncMiscParameterTypeFrameRate))) {
+@@ -132,6 +151,8 @@
+             if (num && den) {
+                 out.frame_rate_num = num;
+                 out.frame_rate_den = den;
++                last_fps_num_ = num;
++                last_fps_den_ = den;
+             }
+         }
+         const VAEncSliceParameterBufferHEVC* slice = picture.slices.empty()
+@@ -224,7 +245,7 @@
+         // means the two buffers describe different pictures.
+         require(params->pic_fields.bits.coding_type == (out.intra ? 1u : 2u),
+             "coding_type does not match the slice type", VA_STATUS_ERROR_INVALID_PARAMETER);
+-        out.peak_bitrate = out.rate_mode == RateMode::Cbr ? out.bitrate : 0;
++        out.peak_bitrate = out.rate_mode == RateMode::Cbr ? out.bitrate : vbr_peak;
+         require(out.rate_mode != RateMode::Cbr || out.bitrate > 0, "CBR needs a bitrate",
+             VA_STATUS_ERROR_INVALID_PARAMETER);
+         if (out.rate_mode == RateMode::Cqp) {
+@@ -240,6 +261,12 @@
+ private:
+     VAProfile profile_;
+     RateMode rate_mode_;
++    uint32_t last_misc_bitrate_ = 0;
++    uint32_t last_vbr_peak_ = 0;
++    int last_min_qp_ = -1;
++    int last_max_qp_ = -1;
++    unsigned last_fps_num_ = 30;
++    unsigned last_fps_den_ = 1;
+ };
+ 
+ } // namespace
+--- a/test/encode-params-test.cc
++++ b/test/encode-params-test.cc
+@@ -646,9 +646,42 @@
+ }
+ } // namespace
+ 
++void test_chromium_sticky_rate_control()
++{
++    auto cbr = iris::codec::make_h264_encoder(VAProfileH264ConstrainedBaseline, RateMode::Cbr);
++    VAEncSequenceParameterBufferH264 seq = h264_sequence();
++    seq.bits_per_second = 0; // Chromium passes bitrate via VAEncMiscParameterRateControl on IDR only
++    VAEncPictureParameterBufferH264 pic = h264_picture();
++    pic.CurrPic.picture_id = 0x1001;
++    pic.pic_fields.bits.idr_pic_flag = 1;
++
++    VAEncMiscParameterRateControl rc = {};
++    rc.bits_per_second = 2500000;
++    std::vector<uint32_t> rc_buf = misc(VAEncMiscParameterTypeRateControl, rc);
++    const iris::EncodeParams idr_out = cbr->translate(h264_input(seq, pic, { rc_buf.data() }));
++    check(idr_out.bitrate == 2500000 && idr_out.peak_bitrate == 2500000, "Chromium IDR CBR bitrate");
++
++    // Subsequent P-frame omits VAEncMiscParameterRateControl; cached bitrate must survive
++    pic.pic_fields.bits.idr_pic_flag = 0;
++    pic.CurrPic.picture_id = 0x1002;
++    VAEncSliceParameterBufferH264 p_slice = h264_slice(seq, false, 0x1001);
++    EncodePicture p_in = h264_input(seq, pic, {});
++    p_in.slices = { &p_slice };
++    const iris::EncodeParams p_out = cbr->translate(p_in);
++    check(p_out.bitrate == 2500000 && p_out.peak_bitrate == 2500000, "Chromium P-frame sticky CBR bitrate");
++
++    auto vbr = iris::codec::make_h264_encoder(VAProfileH264High, RateMode::Vbr);
++    rc.bits_per_second = 4000000;
++    rc.target_percentage = 75;
++    std::vector<uint32_t> vbr_buf = misc(VAEncMiscParameterTypeRateControl, rc);
++    const iris::EncodeParams vbr_out = vbr->translate(h264_input(seq, h264_picture(), { vbr_buf.data() }));
++    check(vbr_out.bitrate == 3000000 && vbr_out.peak_bitrate == 4000000, "VBR target_percentage scaling");
++}
++
+ int main()
+ {
+     test_h264_translation();
++    test_chromium_sticky_rate_control();
+     test_h264_rounding_and_rejections();
+     test_hevc_translation();
+     test_keyframe_request();

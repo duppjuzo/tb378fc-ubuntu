@@ -367,5 +367,171 @@ class TestUfsMemoryOomdAndSecurityCenter(unittest.TestCase):
         sens = (ROOT / 'packaging/sensors/tb378fc-sensord.c').read_text(encoding='utf-8')
         self.assertIn('fmax(2.0, stream->self->light * 0.08)', sens)
 
+
+    def test_bluetooth_aac_wireplumber_bqr_and_kconfig(self):
+        wp_bt = (ROOT / 'packaging/audio/tree/usr/share/wireplumber/wireplumber.conf.d/51-tb378fc-bluetooth.conf').read_text(encoding='utf-8')
+        self.assertIn('bluez5.enable-sbc-xq = true', wp_bt)
+        self.assertIn('bluez5.enable-msbc = true', wp_bt)
+        self.assertIn('bluez5.enable-hw-volume = true', wp_bt)
+        self.assertIn('bluez5.a2dp.aac.bitratemode = 0', wp_bt)
+        self.assertIn('bluez5.a2dp.ldac.quality = "auto"', wp_bt)
+
+        bt_svc = (ROOT / 'packaging/device-support/tree/etc/systemd/system/bluetooth.service.d/92-tb378fc-native.conf').read_text(encoding='utf-8')
+        self.assertIn('--kernel=330859bc-7506-492d-9370-9a6f0614037f', bt_svc)
+        # Never turn on Offload Codecs or LL Privacy unconditionally on WCN7860 UART
+        for line in bt_svc.splitlines():
+            if not line.lstrip().startswith('#'):
+                self.assertNotIn('a6695ace-ee7f-4fb9-881a-5fac66c629af', line)
+                self.assertNotIn('15c0a148-c273-11ea-b3de-0242ac130004', line)
+
+        bdebs = (ROOT / 'tools/build-debs.py').read_text(encoding='utf-8')
+        self.assertIn('libspa-0.2-modules-extra', bdebs)
+        self.assertIn('libfdk-aac2', bdebs)
+
+        brootfs = (ROOT / 'tools/build-desktop-rootfs.py').read_text(encoding='utf-8')
+        self.assertIn('"libspa-0.2-modules-extra"', brootfs)
+        self.assertIn('"libfdk-aac2"', brootfs)
+        self.assertIn('libspa-codec-bluez5-aac.so', brootfs)
+
+        kcfg = (ROOT / 'kernel/configs/tb378fc.config').read_text(encoding='utf-8')
+        self.assertIn('CONFIG_BT_AOSPEXT=y', kcfg)
+        self.assertIn('CONFIG_BT_HIDP=m', kcfg)
+
+    def test_prime_boost_4320mhz_and_power_source_wifi_linkage(self):
+        tg = load_script('tb378fc_thermal_guard_boost', 'tb378fc-thermal-guard.py')
+        self.assertEqual(tg.DEFAULT_MAX_P6, 4_320_000)
+        with tempfile.TemporaryDirectory() as td:
+            p6 = Path(td) / 'policy6'
+            p6.mkdir()
+            (p6 / 'scaling_available_frequencies').write_text('1017600 2438400 3283200 4089600\n')
+            (p6 / 'scaling_boost_frequencies').write_text('4204800 4320000\n')
+            opps = tg.read_policy_opps(p6)
+            self.assertEqual(opps[-2:], [4204800, 4320000])
+            self.assertEqual(tg.snap_opp(4320000, opps), 4320000)
+
+            usb = Path(td) / 'usb'
+            bat = Path(td) / 'bat'
+            usb.mkdir()
+            bat.mkdir()
+            (usb / 'online').write_text('1\n')
+            self.assertTrue(tg.read_ac_online(usb, bat))
+            (usb / 'online').write_text('0\n')
+            self.assertFalse(tg.read_ac_online(usb, bat))
+
+            sf = Path(td) / 'power-profile'
+            st = tg.ProfileState(state_file=sf)
+            self.assertEqual(st.active_profile, 'balanced')
+            self.assertTrue(st.apply_power_source(True))
+            self.assertEqual(st.active_profile, 'performance')
+            self.assertTrue(st.apply_power_source(False))
+            self.assertEqual(st.active_profile, 'balanced')
+            # Manual power-saver must NOT be overwritten when unplugging AC
+            st.set_active_profile('power-saver')
+            self.assertFalse(st.apply_power_source(False))
+            self.assertEqual(st.active_profile, 'power-saver')
+            # Plugging AC back in promotes to performance
+            self.assertTrue(st.apply_power_source(True))
+            self.assertEqual(st.active_profile, 'performance')
+
+            net = Path(td) / 'net'
+            (net / 'wlp1s0/wireless').mkdir(parents=True)
+            (net / 'lo').mkdir(parents=True)
+            with mock.patch.object(tg.shutil, 'which', return_value='/usr/sbin/iw'), \
+                 mock.patch.object(tg.subprocess, 'run', return_value=mock.Mock(returncode=0)) as mrun:
+                self.assertEqual(tg.sync_wifi_power_save(True, net), 1)
+                mrun.assert_called_once_with(
+                    ['/usr/sbin/iw', 'dev', 'wlp1s0', 'set', 'power_save', 'on'],
+                    stdout=tg.subprocess.DEVNULL,
+                    stderr=tg.subprocess.DEVNULL,
+                    check=False,
+                )
+
+    def test_system_optimizations_boot_irq_mglru_bbr_and_video_encode(self):
+        tg_svc = (ROOT / 'packaging/device-support/tree/etc/systemd/system/tb378fc-thermal-guard.service').read_text(encoding='utf-8')
+        self.assertNotIn('Conflicts=power-profiles-daemon.service', tg_svc)
+        self.assertIn('Alias=power-profiles-daemon.service', tg_svc)
+
+        vm = (ROOT / 'packaging/device-support/tree/etc/sysctl.d/90-tb378fc-vm.conf').read_text(encoding='utf-8')
+        for expected in (
+            'vm.watermark_boost_factor = 0',
+            'fs.inotify.max_user_watches = 524288',
+            'fs.inotify.max_user_instances = 1024',
+            'net.core.default_qdisc = fq',
+            'net.ipv4.tcp_congestion_control = bbr',
+            'net.ipv4.tcp_fastopen = 3',
+        ):
+            self.assertIn(expected, vm)
+
+        mglru = (ROOT / 'packaging/device-support/tree/etc/tmpfiles.d/90-tb378fc-mglru.conf').read_text(encoding='utf-8')
+        self.assertIn('/sys/kernel/mm/lru_gen/min_ttl_ms', mglru)
+        self.assertIn('1000', mglru)
+
+        hw_init = (ROOT / 'packaging/device-support/tree/usr/local/sbin/tb378fc-hw-init').read_text(encoding='utf-8')
+        for token in ('gpu-irq', '406000\\.mailbox', 'apps_rsc', 'smp_affinity_list'):
+            self.assertIn(token, hw_init)
+
+        nm = (ROOT / 'packaging/device-support/tree/usr/lib/NetworkManager/conf.d/90-tb378fc-wifi-mac.conf').read_text(encoding='utf-8')
+        self.assertIn('[connectivity]', nm)
+        self.assertIn('enabled=false', nm)
+
+        chrony = (ROOT / 'packaging/device-support/tree/etc/chrony/sources.d/90-tb378fc-cn-ntp.sources').read_text(encoding='utf-8')
+        self.assertIn('203.107.6.88', chrony)
+
+        # Guard Wi-Fi 7 6GHz@320MHz + 5GHz@160MHz: never force ieee80211_regdom=CN
+        for p in (ROOT / 'packaging').rglob('*'):
+            if p.is_file() and '__pycache__' not in p.parts:
+                self.assertNotIn('ieee80211_regdom=CN', p.read_text(encoding='utf-8', errors='ignore'))
+
+        vid = (ROOT / 'packaging/video-defaults/tree/usr/lib/environment.d/60-tb378fc-video.conf').read_text(encoding='utf-8')
+        self.assertIn('vah264enc:512', vid)
+        self.assertIn('vah265enc:512', vid)
+        chr_flags = (ROOT / 'packaging/video-defaults/tree/etc/chromium.d/tb378fc-wayland-vaapi').read_text(encoding='utf-8')
+        self.assertIn('AcceleratedVideoEncoder', chr_flags)
+        self.assertIn('AcceleratedVideoDecodeLinuxZeroCopyGL', chr_flags)
+        self.assertIn('--enable-wayland-ime', chr_flags)
+        self.assertIn('--wayland-text-input-version=3', chr_flags)
+        sync_chrome = (ROOT / 'packaging/video-defaults/tree/usr/local/libexec/tb378fc-sync-chrome-vaapi').read_text(encoding='utf-8')
+        self.assertIn('--enable-wayland-ime --wayland-text-input-version=3', sync_chrome)
+        osk_js = (ROOT / 'packaging/device-support/tree/usr/local/share/tb378fc/gnome-shell/ui/keyboard.js').read_text(encoding='utf-8')
+        self.assertNotIn('this._seat.get_touch_mode() && this._lastDeviceIsTouchscreen()', osk_js)
+        self.assertIn('_maybeOpenForWaylandFocus', osk_js)
+        self.assertIn('global.stage.connectObject(\n            \x27captured-event\x27', osk_js)
+
+        iris_lock = json.loads((ROOT / 'packaging/iris-vaapi/source.json').read_text(encoding='utf-8'))
+        self.assertIn('0007-chromium-vaapi-encode-compat.patch', iris_lock['patches'])
+
+        kcfg = (ROOT / 'kernel/configs/tb378fc.config').read_text(encoding='utf-8')
+        for ksym in (
+            'CONFIG_TCP_CONG_BBR=y',
+            'CONFIG_NET_SCH_FQ=y',
+            'CONFIG_NET_SCH_CAKE=m',
+            'CONFIG_ZRAM_MULTI_COMP=y',
+            'CONFIG_ZRAM_WRITEBACK=y',
+            'CONFIG_DEBUG_INFO_BTF=y',
+            'CONFIG_ATH12K=m',
+            'CONFIG_BT_HCIUART=m',
+            'CONFIG_QCOM_Q6V5_PAS=m',
+        ):
+            self.assertIn(ksym, kcfg)
+
+        brootfs = (ROOT / 'tools/build-desktop-rootfs.py').read_text(encoding='utf-8')
+        self.assertIn('systemd-networkd-wait-online.service', brootfs)
+        self.assertIn('prompting-client', brootfs)
+        self.assertIn('colord.service', brootfs)
+
+
+    def test_lenovo_pogo_keyboard_patch_and_protocol(self):
+        kcfg = (ROOT / 'kernel/configs/tb378fc.config').read_text(encoding='utf-8')
+        self.assertIn('# CONFIG_KEYBOARD_ONEPLUS_POGO is not set', kcfg)
+        self.assertIn('CONFIG_KEYBOARD_LENOVO_POGO=y', kcfg)
+
+        src_meta = json.loads((ROOT / 'kernel/source.json').read_text(encoding='utf-8'))
+        p15 = [p for p in src_meta['kernel']['patches'] if '/0015-' in p]
+        self.assertEqual(len(p15), 1)
+        p15_text = (ROOT / p15[0]).read_text(encoding='utf-8')
+        self.assertIn('lenovo,tb378fc-pogo-keyboard', p15_text)
+        self.assertIn('qcom,tx-en-delay-us = <450>;', p15_text)
+        self.assertIn('input_mt_sync_frame(tdev);', p15_text)
+
 if __name__ == '__main__':
     unittest.main()

@@ -35,6 +35,8 @@ EXTRA_DESKTOP_PACKAGES = (
     "gstreamer1.0-plugins-good",
     "gstreamer1.0-plugins-bad",
     "gstreamer1.0-libav",
+    "libspa-0.2-modules-extra",
+    "libfdk-aac2",
     "vainfo",
     "vulkan-tools",
     "mesa-utils",
@@ -171,8 +173,9 @@ def verify_chroot(root: Path, kernel_release: str) -> dict:
     for k, want in required_env.items():
         if env_map.get(k) != want:
             raise SystemExit(f"environment.d check failed for {k}: expected {want!r}, got {env_map.get(k)!r}")
-    if "vah264dec:512" not in env_map.get("GST_PLUGIN_FEATURE_RANK", ""):
-        raise SystemExit(f"Missing vah264dec rank in GST_PLUGIN_FEATURE_RANK: {env_map.get('GST_PLUGIN_FEATURE_RANK')!r}")
+    for feat in ("vah264dec:512", "vah264enc:512", "vah265enc:512"):
+        if feat not in env_map.get("GST_PLUGIN_FEATURE_RANK", ""):
+            raise SystemExit(f"Missing {feat} rank in GST_PLUGIN_FEATURE_RANK: {env_map.get('GST_PLUGIN_FEATURE_RANK')!r}")
 
     # 3. Verify ldd dynamic linker closure inside real Ubuntu 26.04 ARM64 rootfs (0 'not found')
     ldd_targets = (
@@ -190,6 +193,11 @@ def verify_chroot(root: Path, kernel_release: str) -> dict:
         "/usr/bin/hexagonrpcd",
         "/usr/bin/sensh",
         "/usr/sbin/tb378fc-sensord",
+        "/usr/lib/aarch64-linux-gnu/spa-0.2/bluez5/libspa-codec-bluez5-aac.so",
+        "/usr/lib/aarch64-linux-gnu/spa-0.2/bluez5/libspa-codec-bluez5-ldac.so",
+        "/usr/lib/aarch64-linux-gnu/spa-0.2/bluez5/libspa-codec-bluez5-aptx.so",
+        "/usr/lib/aarch64-linux-gnu/spa-0.2/bluez5/libspa-codec-bluez5-lc3.so",
+        "/usr/lib/aarch64-linux-gnu/spa-0.2/bluez5/libspa-codec-bluez5-sbc.so",
     )
     ldd_results = {}
     for lib in ldd_targets:
@@ -214,8 +222,16 @@ def verify_chroot(root: Path, kernel_release: str) -> dict:
     assert (root / "lib/firmware/qcom/sm8750/Lenovo-TB378FC-tplg.bin").is_file()
     assert (root / "usr/share/alsa/ucm2/conf.d/sm8750/Lenovo-TB378FC.conf").is_symlink()
     assert (root / "usr/libexec/tb378fc-speaker-rotation").is_file()
+    assert (root / "usr/lib/aarch64-linux-gnu/spa-0.2/bluez5/libspa-codec-bluez5-aac.so").is_file()
+    assert (root / "usr/share/wireplumber/wireplumber.conf.d/51-tb378fc-bluetooth.conf").is_file()
     assert (root / "usr/sbin/tb378fc-sensord").is_file()
     assert (root / "etc/systemd/logind.conf.d/90-tb378fc-logind.conf").is_file()
+    assert (root / "etc/tmpfiles.d/90-tb378fc-mglru.conf").is_file()
+    assert (root / "etc/cloud/cloud-init.disabled").is_file()
+    wait_online = root / "etc/systemd/system/systemd-networkd-wait-online.service"
+    assert wait_online.is_symlink() and os.readlink(wait_online) == "/dev/null"
+    colord_unit = root / "etc/systemd/system/colord.service"
+    assert not (colord_unit.is_symlink() and os.readlink(colord_unit) == "/dev/null")
 
     # 5. Ensure no machine-specific state leaked
     mid = root / "etc/machine-id"
@@ -239,6 +255,7 @@ def main() -> int:
     parser.add_argument("--open-firmware-dir", type=Path, required=True)
     parser.add_argument("--work-dir", type=Path, required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
+    parser.add_argument("--apt-mirror", default="https://mirrors.tuna.tsinghua.edu.cn/ubuntu-ports/", help="Single Ubuntu ARM64 ports APT URI")
     parser.add_argument("--jobs", type=int, default=os.cpu_count() or 1)
     parser.add_argument("--keep-layers", action="store_true", help="Keep unpacked minimal/standard dirs for faster rebuilds")
     args = parser.parse_args()
@@ -331,9 +348,24 @@ def main() -> int:
         policy_rc.write_text("#!/bin/sh\nexit 101\n", encoding="utf-8")
         policy_rc.chmod(0o755)
 
-        # Remove ISO cdrom APT source so apt-get uses ports.ubuntu.com cleanly
+        # Remove ISO cdrom APT source and write clean single-URI DEB822 ubuntu.sources (halves APT index fetches)
         for cdrom in (root / "etc/apt/sources.list.d").glob("*cdrom*"):
             cdrom.unlink()
+        mirror_uri = args.apt_mirror.rstrip("/") + "/"
+        rel_codename = lock.get("codename", "resolute")
+        ubuntu_sources = root / "etc/apt/sources.list.d/ubuntu.sources"
+        ubuntu_sources.parent.mkdir(parents=True, exist_ok=True)
+        ubuntu_sources.write_text(
+            f"Types: deb\n"
+            f"URIs: {mirror_uri}\n"
+            f"Suites: {rel_codename} {rel_codename}-updates {rel_codename}-backports {rel_codename}-security\n"
+            f"Components: main universe restricted multiverse\n"
+            f"Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg\n",
+            encoding="utf-8",
+        )
+        legacy_list = root / "etc/apt/sources.list"
+        if legacy_list.is_file():
+            legacy_list.write_text("# APT sources configured in /etc/apt/sources.list.d/ubuntu.sources\n", encoding="utf-8")
 
         # Copy all TB378FC debs into chroot staging dir
         deb_stage = root / ".tb378fc-debs"
@@ -363,8 +395,71 @@ def main() -> int:
         generic_kernels = [p for p in generic_kernels if p and not p.startswith("tb378fc-")]
         if generic_kernels:
             run(["chroot", str(root), "apt-get", "purge", "-y", *generic_kernels], env=env)
+
+        # Purge standalone server/VM/crashdump packages unused on TB378FC tablet
+        purge_candidates = []
+        for pkg in ("cloud-init", "spice-vdagent", "kdump-tools"):
+            rc = subprocess.run(
+                ["chroot", str(root), "dpkg-query", "-W", "-f=${db:Status-Status}", pkg],
+                capture_output=True, text=True, env=env,
+            )
+            if rc.returncode == 0 and rc.stdout.strip() == "installed":
+                purge_candidates.append(pkg)
+        if purge_candidates:
+            run(["chroot", str(root), "apt-get", "purge", "-y", *purge_candidates], env=env)
+
         run(["chroot", str(root), "apt-get", "autoremove", "--purge", "-y"], env=env)
         run(["chroot", str(root), "apt-get", "clean"], env=env)
+
+        # Eliminate 2-minute boot wait-online blockers & disable unused tablet daemons (keep colord.service!)
+        run(["chroot", str(root), "systemctl", "mask", "systemd-networkd-wait-online.service"], env=env)
+        disable_units = [
+            "systemd-networkd.service", "systemd-networkd.socket", "networkd-dispatcher.service",
+            "NetworkManager-wait-online.service", "chrony-wait.service",
+            "ModemManager.service", "spice-vdagentd.service", "spice-vdagentd.socket",
+            "rsyslog.service", "syslog.socket", "kdump-tools.service",
+            "cups.service", "cups.socket", "cups.path", "cups-browsed.service",
+            "speech-dispatcherd.service", "gnome-remote-desktop.service",
+            "avahi-daemon.service", "avahi-daemon.socket", "geoclue.service",
+        ]
+        subprocess.run(["chroot", str(root), "systemctl", "disable", *disable_units], check=False, env=env)
+
+        # Sanitize /etc/default/keyboard so console-setup.service never fails
+        kbd_cfg = root / "etc/default/keyboard"
+        if kbd_cfg.is_file():
+            kbd_cfg.write_text(
+                'XKBMODEL="pc105"\nXKBLAYOUT="us"\nXKBVARIANT=""\nXKBOPTIONS=""\nBACKSPACE="guess"\n',
+                encoding="utf-8",
+            )
+
+        # Hide unused autostart entries (spice-vdagent, orca) without breaking GNOME meta-dependencies
+        for autostart_name in ("spice-vdagent.desktop", "orca-autostart.desktop"):
+            astart = root / "etc/xdg/autostart" / autostart_name
+            if astart.is_file():
+                txt = astart.read_text(encoding="utf-8")
+                if "Hidden=true" not in txt:
+                    astart.write_text(txt.rstrip() + "\nHidden=true\n", encoding="utf-8")
+
+        # Remove Ubuntu downstream-only AppArmor prompting extension & snap seed (mainline 7.4 lacks Ubuntu AppArmor prompting patch)
+        shutil.rmtree(root / "usr/share/gnome-shell/extensions/snapd-prompting@canonical.com", ignore_errors=True)
+        seed_yaml = root / "var/lib/snapd/seed/seed.yaml"
+        if seed_yaml.is_file():
+            lines = seed_yaml.read_text(encoding="utf-8").splitlines(keepends=True)
+            filtered, i = [], 0
+            while i < len(lines):
+                if lines[i].strip() == "-" and i + 1 < len(lines) and "name: prompting-client" in lines[i + 1]:
+                    i += 2
+                    while i < len(lines) and lines[i].startswith("    ") and lines[i].strip() != "-":
+                        i += 1
+                    continue
+                filtered.append(lines[i])
+                i += 1
+            seed_yaml.write_text("".join(filtered), encoding="utf-8")
+        for snap_f in (root / "var/lib/snapd/seed/snaps").glob("prompting-client_*.snap"):
+            snap_f.unlink(missing_ok=True)
+        for assert_f in (root / "var/lib/snapd/seed/assertions").glob("*"):
+            if assert_f.is_file() and "prompting-client" in assert_f.read_text(encoding="utf-8", errors="ignore"):
+                assert_f.unlink(missing_ok=True)
 
         # Generate kernel module dependency graph for our unified Linux 7.4 kernel
         run(["chroot", str(root), "depmod", "-a", kernel_release], env=env)

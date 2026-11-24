@@ -20,7 +20,9 @@
       "kernel/patches/0010-platform-SM8750-TB378FC-suspend-reliability-and-WCN7.patch",
       "kernel/patches/0011-drm-msm-program-VESA-DSC-1.2-RC-parameters-and-guard.patch",
       "kernel/patches/0012-arm64-dts-qcom-tb378fc-set-landscape-camera-rotation.patch",
-      "kernel/patches/0013-arm64-dts-qcom-tb378fc-add-USB-C-DisplayPort0-audio-.patch"
+      "kernel/patches/0013-arm64-dts-qcom-tb378fc-add-USB-C-DisplayPort0-audio-.patch",
+      "kernel/patches/0014-platform-tb378fc-fix-schedutil-4.32-GHz-boost-nt3653.patch",
+      "kernel/patches/0015-Input-lenovo_pogo_keyboard-add-TB378FC-magnetic-pogo.patch"
     ],
     "upstream_config_fragments": [
       "arch/arm64/configs/sm8750-netfilter.config",

@@ -3,6 +3,7 @@
   "etc/systemd/system/graphical.target.wants/tb378fc-volume-orientation.service": "../tb378fc-volume-orientation.service",
   "etc/systemd/system/multi-user.target.wants/tb378fc-bluetooth-address.service": "../tb378fc-bluetooth-address.service",
   "etc/systemd/system/multi-user.target.wants/tb378fc-hw-init.service": "../tb378fc-hw-init.service",
+  "etc/systemd/system/multi-user.target.wants/tb378fc-snap-tune.service": "../tb378fc-snap-tune.service",
   "etc/systemd/system/multi-user.target.wants/tb378fc-thermal-guard.service": "../tb378fc-thermal-guard.service",
   "etc/systemd/system/multi-user.target.wants/tb378fc-zram.service": "../tb378fc-zram.service",
   "etc/systemd/system/power-profiles-daemon.service": "tb378fc-thermal-guard.service",

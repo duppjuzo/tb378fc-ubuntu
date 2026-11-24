@@ -1,0 +1,2 @@
+// Re-sync Google Chrome Wayland + Iris VA-API launcher overrides after APT transactions
+DPkg::Post-Invoke { "if [ -x /usr/local/libexec/tb378fc-sync-chrome-vaapi ]; then /usr/local/libexec/tb378fc-sync-chrome-vaapi || true; fi"; };

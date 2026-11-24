@@ -199,3 +199,19 @@ def test_wifi_and_bluetooth_interfaces(tb378fc) -> None:
 
     hci = tb378fc.run("ls -1 /sys/class/bluetooth/ 2>/dev/null || true").stdout.strip()
     assert hci, "No Bluetooth HCI controller found under /sys/class/bluetooth/ (check qcom_geni_serial + hci_uart)."
+
+
+@pytest.mark.connectivity
+def test_bluetooth_spa_codecs_present(tb378fc) -> None:
+    out = tb378fc.run("ls -1 /usr/lib/aarch64-linux-gnu/spa-0.2/bluez5/ 2>/dev/null || true").stdout
+    for codec_so in (
+        "libspa-codec-bluez5-sbc.so",
+        "libspa-codec-bluez5-aac.so",
+        "libspa-codec-bluez5-aptx.so",
+        "libspa-codec-bluez5-ldac.so",
+        "libspa-codec-bluez5-lc3.so",
+        "libspa-codec-bluez5-hfp-msbc.so",
+        "libspa-codec-bluez5-hfp-lc3-swb.so",
+    ):
+        assert codec_so in out, f"Missing PipeWire Bluetooth codec plugin {codec_so} (install libspa-0.2-modules-extra & libfdk-aac2)."
+

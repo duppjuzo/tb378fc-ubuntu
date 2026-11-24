@@ -1,0 +1,13 @@
+[Unit]
+Description=Lenovo TB378FC One-Shot Snap Retention & AppArmor Prompting Cleanup
+After=snapd.service snapd.seeded.service
+ConditionPathExists=/usr/bin/snap
+ConditionPathExists=!/var/lib/tb378fc/snap-tuned
+
+[Service]
+Type=oneshot
+ExecStart=/bin/sh -c 'if systemctl is-active --quiet snapd.service || systemctl is-active --quiet snapd.socket; then snap set system refresh.retain=2 2>/dev/null || true; if snap list prompting-client >/dev/null 2>&1; then snap remove --purge prompting-client 2>/dev/null || true; fi; mkdir -p /var/lib/tb378fc && touch /var/lib/tb378fc/snap-tuned; fi'
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

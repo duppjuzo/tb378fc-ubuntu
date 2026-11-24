@@ -1,6 +1,6 @@
 #!/bin/sh
 # SPDX-License-Identifier: GPL-2.0-only
-# 1:1 RAM-sized zstd compressed swap on /dev/zram0.
+# 1:1 RAM-sized compressed swap on /dev/zram0 (lz4 hot primary + zstd secondary multi-comp when available).
 set -eu
 
 [ -e /sys/block/zram0/disksize ] || modprobe zram num_devices=1 2>/dev/null || exit 0
@@ -13,7 +13,10 @@ if [ -z "${mem_kb:-}" ] || [ "$mem_kb" -le 0 ]; then
 fi
 disk_bytes=$(( (mem_kb / 4) * 4096 ))
 
-if grep -qw zstd /sys/block/zram0/comp_algorithm 2>/dev/null; then
+if [ -w /sys/block/zram0/recomp_algorithm ] &&    grep -qw lz4 /sys/block/zram0/comp_algorithm 2>/dev/null &&    grep -qw zstd /sys/block/zram0/comp_algorithm 2>/dev/null; then
+    echo lz4 > /sys/block/zram0/comp_algorithm
+    echo "algo=zstd priority=1" > /sys/block/zram0/recomp_algorithm 2>/dev/null || true
+elif grep -qw zstd /sys/block/zram0/comp_algorithm 2>/dev/null; then
     echo zstd > /sys/block/zram0/comp_algorithm
 else
     echo lz4 > /sys/block/zram0/comp_algorithm

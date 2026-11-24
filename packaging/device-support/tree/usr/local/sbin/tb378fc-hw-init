@@ -1,9 +1,15 @@
 #!/bin/sh
 # SPDX-License-Identifier: GPL-2.0-only
-# Lenovo Xiaoxin Pad Pro GT 13 (TB378FC) post-rootfs hardware bringup
+# Lenovo Xiaoxin Pad Pro GT 13 (TB378FC) post-rootfs hardware bringup & IRQ balancing
 set -eu
 
-# 0. Ensure regular local desktop accounts are in video and render groups so
+# 0. Sanitize /etc/default/keyboard if gnome-initial-setup wrote invalid XKBLAYOUT="default,us"
+if [ -f /etc/default/keyboard ]; then
+    sed -i -E 's/^XKBLAYOUT="default,([^"]+)"/XKBLAYOUT="\1"/; s/^XKBLAYOUT="([^"]+),(default)"/XKBLAYOUT="\1"/; s/^XKBLAYOUT="default"/XKBLAYOUT="us"/; s/^XKBVARIANT=",([^"]*)"/XKBVARIANT="\1"/' \
+        /etc/default/keyboard 2>/dev/null || true
+fi
+
+# 1. Ensure regular local desktop accounts are in video and render groups so
 #    WirePlumber/libcamera, Iris VA-API (/dev/dma_heap/system), and torch work
 #    immediately on cold boot even before seat ACL transitions settle.
 if command -v usermod >/dev/null 2>&1; then
@@ -16,7 +22,7 @@ if command -v usermod >/dev/null 2>&1; then
     done
 fi
 
-# 1. Start ADSP / CDSP remoteprocs that deferred before rootfs /lib/firmware mounted
+# 2. Start ADSP / CDSP remoteprocs that deferred before rootfs /lib/firmware mounted
 for r in /sys/class/remoteproc/remoteproc*; do
     [ -e "$r/state" ] || continue
     if [ "$(cat "$r/state" 2>/dev/null || true)" = "offline" ]; then
@@ -24,14 +30,7 @@ for r in /sys/class/remoteproc/remoteproc*; do
     fi
 done
 
-# 2. Ensure Novatek NT36536 SPI touchscreen bound with /lib/firmware/novatek/tb378fc.bin
-if [ -e /sys/bus/spi/devices/spi0.0 ] && [ ! -d /sys/bus/spi/devices/spi0.0/input ]; then
-    echo spi0.0 > /sys/bus/spi/drivers/nt36536/unbind 2>/dev/null || true
-    sleep 0.2
-    echo spi0.0 > /sys/bus/spi/drivers/nt36536/bind 2>/dev/null || true
-fi
-
-# 3. Ensure WCN7860 Wi-Fi 7 PCIe endpoint bound with /lib/firmware/ath12k/WCN7860/hw2.0/
+# 4. Ensure WCN7860 Wi-Fi 7 PCIe endpoint bound with /lib/firmware/ath12k/WCN7860/hw2.0/
 if [ -e /sys/bus/pci/devices/0000:01:00.0 ] && [ ! -e /sys/bus/pci/devices/0000:01:00.0/driver ]; then
     echo 1 > /sys/bus/pci/devices/0000:01:00.0/remove 2>/dev/null || true
     sleep 0.3
@@ -40,7 +39,35 @@ elif [ ! -e /sys/bus/pci/devices/0000:01:00.0 ]; then
     echo 1 > /sys/bus/pci/rescan 2>/dev/null || true
 fi
 
-# 4. Export non-sensitive SMEM/DT hardware metadata for unprivileged desktop tools (e.g. Resources)
+# 5. Dynamic SM8750 IRQ CPU-affinity balancing by /proc/interrupts name (never hardcode IRQ numbers!):
+#    - CPU 0: msm_mdss (VSync/display)
+#    - CPU 1: 406000.mailbox (IPCC)
+#    - CPU 2: gpu-irq (Adreno 830)
+#    - CPU 3-4: ath12k (WCN7860 Wi-Fi 7)
+#    - CPU 5: qcom_geni_serial / uart0 & apps_rsc (RPMh/BT UART)
+#    - CPU 6-7: Prime Oryon cores left free of heavy platform IRQ contention
+if [ -r /proc/interrupts ]; then
+    awk '
+    /^[[:space:]]*[0-9]+:/ {
+        irq = $1
+        sub(/:/, "", irq)
+        line = $0
+        if (line ~ /gpu-irq/) {
+            print irq, "2"
+        } else if (line ~ /406000\.mailbox/) {
+            print irq, "1"
+        } else if (line ~ /(qcom_geni_serial|uart0|apps_rsc)/) {
+            print irq, "5"
+        } else if (line ~ /ath12k/) {
+            print irq, "3-4"
+        }
+    }' /proc/interrupts | while read -r irq cpus; do
+        if [ -z "${irq:-}" ] || [ ! -w "/proc/irq/$irq/smp_affinity_list" ]; then continue; fi
+        echo "$cpus" > "/proc/irq/$irq/smp_affinity_list" 2>/dev/null || true
+    done
+fi
+
+# 6. Export non-sensitive SMEM/DT hardware metadata for unprivileged desktop tools (e.g. Resources)
 mkdir -p /run/tb378fc
 chmod 0755 /run/tb378fc
 if command -v python3 >/dev/null 2>&1; then
@@ -106,6 +133,10 @@ fi
 
 if [ -x /usr/local/libexec/tb378fc-generate-icc ] && [ ! -s /usr/share/color/icc/colord/Lenovo-TB378FC-Display-P3.icc ]; then
     /usr/local/libexec/tb378fc-generate-icc /usr/share/color/icc/colord >/dev/null 2>&1 || true
+fi
+
+if [ -x /usr/local/libexec/tb378fc-sync-chrome-vaapi ]; then
+    /usr/local/libexec/tb378fc-sync-chrome-vaapi >/dev/null 2>&1 || true
 fi
 
 exit 0

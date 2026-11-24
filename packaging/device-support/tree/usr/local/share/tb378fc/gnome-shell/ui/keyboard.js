@@ -26,23 +26,54 @@ let tbTouchCounts = {};
 let tbTouchTotals = {};
 let tbTouchReport = 0;
 let tbStageSignal = 0;
+let tbRootStageSignal = 0;
+let tbLastTouchUs = 0;
+let tbLastObservedEvent = null;
+
+function tbShouldAutoOpenOsk() {
+    if (Main.keyboard?._a11yApplicationsSettings?.get_boolean('screen-keyboard-enabled'))
+        return true;
+    const now = GLib.get_monotonic_time();
+    return tbLastTouchUs > 0 && (now - tbLastTouchUs) < 2000000;
+}
+
+function tbRecordStageInput(_actor, event) {
+    if (tbLastObservedEvent === event)
+        return Clutter.EVENT_PROPAGATE;
+    tbLastObservedEvent = event;
+
+    const type = event.type();
+    if (type >= Clutter.EventType.TOUCH_BEGIN &&
+        type <= Clutter.EventType.TOUCH_CANCEL) {
+        if (type === Clutter.EventType.TOUCH_BEGIN ||
+            type === Clutter.EventType.TOUCH_END)
+            tbLastTouchUs = GLib.get_monotonic_time();
+        tbTouchCount(`stage_${type}`);
+        const age = GLib.get_monotonic_time() / 1000 - event.get_time();
+        if (age >= 0 && age < 60000 && tbTouchOptions().trace)
+            tbTouchCounts.stageMaxAgeMs = Math.max(
+                tbTouchCounts.stageMaxAgeMs ?? 0, Math.round(age));
+    } else if (type === Clutter.EventType.BUTTON_PRESS ||
+               type === Clutter.EventType.BUTTON_RELEASE) {
+        try {
+            const dt = event.get_source_device()?.get_device_type();
+            if (dt === Clutter.InputDeviceType.TABLET_DEVICE ||
+                dt === Clutter.InputDeviceType.PEN_DEVICE)
+                tbLastTouchUs = GLib.get_monotonic_time();
+        } catch {
+        }
+    }
+    return Clutter.EVENT_PROPAGATE;
+}
 
 function tbObserveStage() {
     if (tbStageSignal)
         return;
-    // Modal grabs start propagation at uiGroup, skipping the stage ancestor.
-    tbStageSignal = Main.uiGroup.connect('captured-event', (_group, event) => {
-        const type = event.type();
-        if (type >= Clutter.EventType.TOUCH_BEGIN &&
-            type <= Clutter.EventType.TOUCH_CANCEL) {
-            tbTouchCount(`stage_${type}`);
-            const age = GLib.get_monotonic_time() / 1000 - event.get_time();
-            if (age >= 0 && age < 60000 && tbTouchOptions().trace)
-                tbTouchCounts.stageMaxAgeMs = Math.max(
-                    tbTouchCounts.stageMaxAgeMs ?? 0, Math.round(age));
-        }
-        return Clutter.EVENT_PROPAGATE;
-    });
+    // Normal Wayland client windows live in global.window_group under global.stage
+    // (sibling of Main.uiGroup), whereas modal grabs start at Main.uiGroup.
+    // Observe both so client-window taps and lock-screen taps are both captured.
+    tbRootStageSignal = global.stage.connect('captured-event', tbRecordStageInput);
+    tbStageSignal = Main.uiGroup.connect('captured-event', tbRecordStageInput);
     let previous = GLib.get_monotonic_time();
     GLib.timeout_add(GLib.PRIORITY_DEFAULT, 1000, () => {
         const now = GLib.get_monotonic_time();
@@ -1316,8 +1347,21 @@ export class KeyboardManager extends Signals.EventEmitter {
 
         this._lastDevice = null;
         global.backend.connect('last-device-changed', (backend, device) => {
-            if (device.device_type === Clutter.InputDeviceType.KEYBOARD_DEVICE)
+            let dt;
+            try {
+                if (!device)
+                    return;
+                dt = device.get_device_type();
+                if (dt === Clutter.InputDeviceType.KEYBOARD_DEVICE)
+                    return;
+            } catch {
                 return;
+            }
+
+            if (dt === Clutter.InputDeviceType.TOUCHSCREEN_DEVICE ||
+                dt === Clutter.InputDeviceType.TABLET_DEVICE ||
+                dt === Clutter.InputDeviceType.PEN_DEVICE)
+                tbLastTouchUs = GLib.get_monotonic_time();
 
             this._lastDevice = device;
             this._syncEnabled();
@@ -1350,13 +1394,23 @@ export class KeyboardManager extends Signals.EventEmitter {
         if (!this._lastDevice)
             return false;
 
-        const deviceType = this._lastDevice.get_device_type();
-        return deviceType === Clutter.InputDeviceType.TOUCHSCREEN_DEVICE;
+        try {
+            const deviceType = this._lastDevice.get_device_type();
+            return deviceType === Clutter.InputDeviceType.TOUCHSCREEN_DEVICE ||
+                deviceType === Clutter.InputDeviceType.TABLET_DEVICE ||
+                deviceType === Clutter.InputDeviceType.PEN_DEVICE;
+        } catch {
+            this._lastDevice = null;
+            return false;
+        }
     }
 
     _syncEnabled() {
         const enableKeyboard = this._a11yApplicationsSettings.get_boolean(SHOW_KEYBOARD);
-        const autoEnabled = this._seat.get_touch_mode() && this._lastDeviceIsTouchscreen();
+        // TB378FC has no SW_TABLET_MODE switch, so connecting a Bluetooth keyboard/mouse
+        // drops seat.get_touch_mode() to false; rely on _lastDeviceIsTouchscreen() so
+        // touch/pen taps always bring up OSK while mouse/keyboard use keeps it hidden.
+        const autoEnabled = this._lastDeviceIsTouchscreen();
         const enabled = enableKeyboard || autoEnabled;
 
         if (!enabled && !this._keyboard)
@@ -1496,10 +1550,18 @@ export const Keyboard = GObject.registerClass({
         this._modifierKeys = new Map();
 
         this._suggestions = null;
+        this._destroyed = false;
+        this._lastImFocus = null;
+        this._tapCheckId = 0;
+        this._tapStartX = 0;
+        this._tapStartY = 0;
+        this._tapStartTime = 0;
+        this._tapMoved = true;
 
         this._focusTracker = new FocusTracker();
         this._focusTracker.connectObject(
             'position-changed', this._onFocusPositionChanged.bind(this),
+            'focus-changed', this._onFocusChanged.bind(this),
             'window-grabbed', this._onFocusWindowMoving.bind(this), this);
 
         this._windowMovedId = this._focusTracker.connect('window-moved',
@@ -1528,12 +1590,97 @@ export const Keyboard = GObject.registerClass({
     }
 
     _onFocusPositionChanged(focusTracker) {
+        if (this._destroyed)
+            return;
         const rect = focusTracker.getCurrentRect();
         this.setCursorLocation(focusTracker.currentWindow, rect.x, rect.y, rect.width, rect.height);
         this._updateLevelFromHints(true);
+        this._maybeOpenForWaylandFocus();
+    }
+
+    _onFocusChanged(_focusTracker, focused) {
+        if (this._destroyed || Main.inputMethod.currentFocus)
+            return;
+
+        if (focused) {
+            if (tbShouldAutoOpenOsk())
+                this.open(false);
+        } else {
+            this.close();
+        }
+    }
+
+    _maybeOpenForWaylandFocus() {
+        if (this._destroyed)
+            return;
+        const focus = Main.inputMethod.currentFocus;
+        if (!focus) {
+            this._lastImFocus = null;
+            return;
+        }
+        if (this._lastImFocus !== focus) {
+            this._lastImFocus = focus;
+            if (tbShouldAutoOpenOsk())
+                this.open(false);
+        }
+    }
+
+    _scheduleTapFocusCheck() {
+        if (this._tapCheckId) {
+            GLib.source_remove(this._tapCheckId);
+            this._tapCheckId = 0;
+        }
+        this._tapCheckId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 90, () => {
+            this._tapCheckId = 0;
+            if (!this._destroyed && !this._keyboardVisible &&
+                Main.inputMethod.currentFocus && tbShouldAutoOpenOsk())
+                this.open(false);
+            return GLib.SOURCE_REMOVE;
+        });
+    }
+
+    _onStageCapturedTouch(_actor, event) {
+        if (this._destroyed || this._lastTouchEvent === event)
+            return Clutter.EVENT_PROPAGATE;
+        this._lastTouchEvent = event;
+
+        const type = event.type();
+        if (type === Clutter.EventType.TOUCH_BEGIN) {
+            const target = global.stage.get_event_actor(event);
+            if (this._keyboardVisible || tbKeyboardTarget(target) ||
+                (Main.actionMode !== Shell.ActionMode.NORMAL &&
+                 Main.actionMode !== Shell.ActionMode.POPUP)) {
+                this._tapMoved = true;
+                return Clutter.EVENT_PROPAGATE;
+            }
+            [this._tapStartX, this._tapStartY] = event.get_coords();
+            this._tapStartTime = event.get_time();
+            this._tapMoved = false;
+        } else if (type === Clutter.EventType.TOUCH_UPDATE && !this._tapMoved) {
+            const [x, y] = event.get_coords();
+            if (Math.hypot(x - this._tapStartX, y - this._tapStartY) > 28)
+                this._tapMoved = true;
+        } else if (type === Clutter.EventType.TOUCH_CANCEL) {
+            this._tapMoved = true;
+        } else if (type === Clutter.EventType.TOUCH_END && !this._tapMoved) {
+            const dt = event.get_time() - this._tapStartTime;
+            this._tapMoved = true;
+            if (dt >= 0 && dt < 600 && !this._keyboardVisible)
+                this._scheduleTapFocusCheck();
+        }
+        return Clutter.EVENT_PROPAGATE;
     }
 
     _onDestroy() {
+        this._destroyed = true;
+        if (this._tapCheckId) {
+            GLib.source_remove(this._tapCheckId);
+            this._tapCheckId = 0;
+        }
+        if (this._surroundingTextId) {
+            Main.inputMethod.disconnect(this._surroundingTextId);
+            this._surroundingTextId = 0;
+        }
         if (this._windowMovedId) {
             this._focusTracker.disconnect(this._windowMovedId);
             delete this._windowMovedId;
@@ -1596,8 +1743,22 @@ export const Keyboard = GObject.registerClass({
             this);
         global.stage.connectObject('notify::key-focus',
             this._onKeyFocusChanged.bind(this), this);
+        Main.inputMethod.connectObject(
+            'notify::can-show-preedit', () => this._maybeOpenForWaylandFocus(),
+            'cursor-location-changed', () => this._maybeOpenForWaylandFocus(),
+            'surrounding-text-set', () => this._maybeOpenForWaylandFocus(),
+            this);
+        global.stage.connectObject(
+            'captured-event', this._onStageCapturedTouch.bind(this),
+            this);
+        Main.uiGroup.connectObject(
+            'captured-event', this._onStageCapturedTouch.bind(this),
+            this);
 
         this._relayout();
+
+        if (Main.inputMethod.currentFocus && tbShouldAutoOpenOsk())
+            this._scheduleTapFocusCheck();
     }
 
     _onContentHintsChanged(controller, contentHint) {
@@ -1631,6 +1792,13 @@ export const Keyboard = GObject.registerClass({
 
             this._surroundingTextId =
                 Main.inputMethod.connect('surrounding-text-set', () => {
+                    if (this._destroyed) {
+                        if (this._surroundingTextId) {
+                            Main.inputMethod.disconnect(this._surroundingTextId);
+                            this._surroundingTextId = 0;
+                        }
+                        return;
+                    }
                     const [text, cursor] = Main.inputMethod.getSurroundingText();
                     if (!text || cursor === 0) {
                         // First character in the buffer
@@ -1972,8 +2140,12 @@ export const Keyboard = GObject.registerClass({
     }
 
     _setActiveLevel(activeLevel) {
+        if (this._destroyed || !this._aspectContainer || !this._emojiSelection)
+            return;
         const layers = this._layers;
-        const currentPage = layers[activeLevel];
+        const currentPage = layers?.[activeLevel];
+        if (!currentPage)
+            return;
 
         if (this._currentPage === currentPage) {
             this._updateCurrentPageVisible();
@@ -2295,6 +2467,14 @@ class KeyboardController extends Signals.EventEmitter {
     }
 
     destroy() {
+        if (this._surroundingUpdateId > 0) {
+            Main.inputMethod.disconnect(this._surroundingUpdateId);
+            this._surroundingUpdateId = 0;
+        }
+        if (this._surroundingUpdateTimeoutId > 0) {
+            GLib.source_remove(this._surroundingUpdateTimeoutId);
+            this._surroundingUpdateTimeoutId = 0;
+        }
         this._inputSourceManager.disconnectObject(this);
         Main.inputMethod.disconnectObject(this);
 
