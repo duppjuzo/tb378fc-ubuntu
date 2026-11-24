@@ -8,6 +8,7 @@
    - 刷入合入补丁 `0014` 与精简早期 initramfs 的 GKI v4 启动三件套后执行冷重启：`dmesg` 中 `nt36536` 报错数为 `0`，`IRQ 207/209` 进桌面立即就绪，彻底消除开机需息屏重亮才能恢复触控的问题；同时消除了早期 Adreno 830 GMU OOB 5 秒超时。
    - 在 GNOME 50 Wayland 会话同时打开多个应用窗口及 Google Chrome 地址栏/网页输入框进行触屏点击测试：虚拟键盘在客户端窗口（`global.stage`）与 Chrome（Wayland Text Input v3）中均稳定自动弹出与收起，蓝牙外设共存逻辑正常。
    - `schedutil` + `boost=1` 下实机单核负载观测到 CPU6/CPU7 升频至 **4,320,000 kHz（4.32 GHz）**；`a600000.usb-mux` 注册正常，`109ab000.tn` 已禁用，`systemctl --failed` 为 `0` 失败单元。
+   - 常驻内存精简与 `zram` 二级重压缩验证（保留 `snapd` 与应用中心）：全系统常驻 Python 守护进程由 7 个收敛至 **2 个**（系统级 `tb378fc-thermal-guard` + 会话级 `tb378fc-v4l2-camera-bridge`），`fwupd` 切换为 `--timed-exit` 按需唤醒退出，桌面用户态总 `PSS` 实测由 `1979.0 MiB` 降至 **`1812.9 MiB`（净省 `166.1 MiB`）**，`MemAvailable` 升至 `7695 MiB`。
 2. **联想 TB378FC 磁吸触点键盘驱动（补丁 `0015`）分级验证记录**：
    - **离线验证（已通过）**：64 字节旋转 XOR 加扰/解扰、PPP 帧编解码、按键/四指触控板协议单测、`checkpatch.pl`（0 错误/0 警告）、`dt-doc-validate`（0 错误）与 `-Werror` 编译全部通过。
    - **平板端实机探测验证（未吸附键盘状态，已通过）**：`a88000.serial: ttyHS1`（`IRQ 190`）、`lenovo-pogo-keyboard serial1-0` 绑定成功，未吸附时自动断电（`connected=0, plug_status=0`），`IRQ 210 (lenovo-kb-plug)`、`IRQ 211 (lenovo-kb-wake)` 与 `power/wakeup=enabled` 全部正常。
@@ -29,5 +30,5 @@
 
 - `tools/check-source.py`：全仓文本语法、相对符号链接、禁止硬编码与私钥扫描通过；
 - `shellcheck`：全部 initramfs、构建器与设备支持脚本无错误通过；
-- `pytest`：42 项单元测试（含纯 Python AVB 2.0 `SHA256_RSA4096` 签名与 `avbtool verify_image` 互验、DTBO 符号覆盖校验、4K 扇区 GPT 无损切分与 CRC32 校验、AW88480 Music ACF 切片及同槽切换逻辑）全部通过；
+- `pytest`：43 项单元测试（含纯 Python AVB 2.0 `SHA256_RSA4096` 签名与 `avbtool verify_image` 互验、DTBO 符号覆盖校验、4K 扇区 GPT 无损切分与 CRC32 校验、AW88480 Music ACF 切片及同槽切换逻辑）全部通过；
 - `checkpatch.pl` & `dtb_audit` (`9/9`)：15 个内核补丁与 TB378FC 设备树保留内存/温控/板级隔离审计全部通过。

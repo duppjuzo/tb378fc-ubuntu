@@ -533,5 +533,77 @@ class TestUfsMemoryOomdAndSecurityCenter(unittest.TestCase):
         self.assertIn('qcom,tx-en-delay-us = <450>;', p15_text)
         self.assertIn('input_mt_sync_frame(tdev);', p15_text)
 
+
+    def test_consolidated_daemons_zram_recompress_and_snapd_preserved(self):
+        tg = load_script('tb378fc_thermal_guard_recomp', 'tb378fc-thermal-guard.py')
+        vol = load_script('tb378fc_volume_orientation_tf', 'tb378fc-volume-orientation')
+
+        with tempfile.TemporaryDirectory() as td:
+            zdir = Path(td) / 'zram0'
+            zdir.mkdir()
+            mm_stat = zdir / 'mm_stat'
+            idle_f = zdir / 'idle'
+            recomp_f = zdir / 'recompress'
+            compact_f = zdir / 'compact'
+            idle_f.write_text('', encoding='utf-8')
+            recomp_f.write_text('', encoding='utf-8')
+            compact_f.write_text('', encoding='utf-8')
+
+            recomp_writes = []
+            orig_write = tg.write_sysfs
+
+            def track_write(path: Path, value: str) -> bool:
+                if path == recomp_f:
+                    recomp_writes.append(value)
+                return orig_write(path, value)
+
+            with mock.patch.object(tg, 'write_sysfs', side_effect=track_write):
+                zr = tg.ZramRecompressor(zram_dir=zdir, interval_sec=120.0, min_orig_bytes=8 * 1024 * 1024)
+                # Below threshold: no idle mark, no recompress
+                mm_stat.write_text('4096 64 20480 0 20480 0 0 0 0\n', encoding='utf-8')
+                self.assertFalse(zr.poll(100.0))
+                self.assertFalse(zr.idle_marked)
+
+                # Above threshold (32 MiB): first window marks 'all' idle without recompressing yet
+                mm_stat.write_text(f'{32 * 1024 * 1024} 8000000 10000000 0 10000000 0 0 0 0\n', encoding='utf-8')
+                self.assertFalse(zr.poll(250.0))
+                self.assertTrue(zr.idle_marked)
+                self.assertEqual(idle_f.read_text(encoding='utf-8').strip(), 'all')
+                self.assertEqual(recomp_writes, [])
+
+                # Next 120s window: recompresses aged idle + huge_idle pages and compacts pool
+                self.assertTrue(zr.poll(380.0))
+                self.assertEqual(recomp_writes, ['type=idle max_pages=4096', 'type=huge_idle max_pages=1024'])
+                self.assertEqual(compact_f.read_text(encoding='utf-8').strip(), '1')
+
+            # Fast tmpfs display-transform lookup without spawning --watch-display
+            rdir = Path(td) / 'run-user-1000'
+            rdir.mkdir()
+            (rdir / 'tb378fc-display-transform').write_text('3\n', encoding='utf-8')
+            self.assertEqual(vol.read_session_transform(1000, 1000, str(rdir), {}), 3)
+
+        # Verify systemd consolidation guards, fwupd timed-exit, update-notifier override & snapd preserved
+        sym = json.loads((ROOT / 'packaging/device-support/symlinks.json').read_text(encoding='utf-8'))
+        self.assertNotIn('etc/systemd/system/graphical.target.wants/tb378fc-power-key.service', sym)
+        self.assertNotIn('etc/systemd/system/graphical.target.wants/tb378fc-volume-orientation.service', sym)
+
+        pk_svc = (ROOT / 'packaging/device-support/tree/etc/systemd/system/tb378fc-power-key.service').read_text(encoding='utf-8')
+        vol_svc = (ROOT / 'packaging/device-support/tree/etc/systemd/system/tb378fc-volume-orientation.service').read_text(encoding='utf-8')
+        sr_svc = (ROOT / 'packaging/audio/tree/usr/lib/systemd/user/tb378fc-speaker-rotation.service').read_text(encoding='utf-8')
+        self.assertIn('ConditionPathExists=!/run/tb378fc-system-consolidated', pk_svc)
+        self.assertIn('ConditionPathExists=!/run/tb378fc-system-consolidated', vol_svc)
+        self.assertIn('ConditionPathExists=!/usr/local/libexec/tb378fc-v4l2-camera-bridge.py', sr_svc)
+
+        fwupd = (ROOT / 'packaging/device-support/tree/etc/systemd/system/fwupd.service.d/90-tb378fc-idle.conf').read_text(encoding='utf-8')
+        self.assertIn('--timed-exit', fwupd)
+
+        un_desk = (ROOT / 'packaging/device-support/tree/etc/xdg/xdg-ubuntu/autostart/update-notifier.desktop').read_text(encoding='utf-8')
+        self.assertIn('Hidden=true', un_desk)
+
+        bdebs = (ROOT / 'tools/build-debs.py').read_text(encoding='utf-8')
+        self.assertIn('unattended-upgrades.service', bdebs)
+        self.assertNotIn('disable snapd', bdebs)
+        self.assertNotIn('mask snapd', bdebs)
+
 if __name__ == '__main__':
     unittest.main()

@@ -19,6 +19,7 @@
   - 重写 `packaging/device-support/tree/usr/local/share/tb378fc/gnome-shell/ui/keyboard.js` 触控焦点追踪：同时在 `global.stage` 与 `Main.uiGroup` 捕获触屏轻点事件（覆盖位于 `global.window_group` 的普通桌面客户端窗口），兼容单次 `zwp_text_input_v3.enable()` 会话模型，并修复连接蓝牙键鼠外设时触屏点击仍可自动弹出虚拟键盘。
   - 在 `/etc/chromium.d/tb378fc-wayland-vaapi` 与新增 `/usr/local/libexec/tb378fc-sync-chrome-vaapi`（含 APT `DPkg::Post-Invoke` 钩子）自动注入 `--enable-wayland-ime --wayland-text-input-version=3`，使 Google Chrome / Chromium 原生走 Wayland Text Input v3 协议唤醒虚拟键盘。
 - **启动提速、存储/内存调优、蓝牙高清音频与 Iris VA-API 更新**：
+  - **常驻内存深度精简（保留 `snapd` 与应用中心）**：将板级 6 个常驻 Python 进程收敛为 **1 个系统守护进程 + 1 个用户会话守护进程**（`tb378fc-thermal-guard` 进程内托管电源键与无子进程音量键旋转路由，`tb378fc-v4l2-camera-bridge` 进程内托管四扬声器旋转并共享 `$XDG_RUNTIME_DIR/tb378fc-display-transform`）；为 `fwupd.service` 配置 `--timed-exit` 按需唤醒后自动退出，停用常驻空等信号的 `unattended-upgrades.service` 与后台常驻 `update-notifier`；并在 `ThermalGuardDaemon` 内置每 120 秒零子进程 `/sys/block/zram0/recompress` 冷页 `lz4 -> zstd` 二级重压缩与 `compact` 内存池紧缩。
   - `tools/build-initramfs.sh` 精简早期 initramfs 固件（仅保留 `regulatory.db*`），避免根分区挂载前 Adreno 830 提前抢跑触发约 5 秒 GMU OOB 超时。
   - 新增 `tb378fc-hw-init` UFS 4.0 MCQ 队列与缓存调优、`90-tb378fc-mglru.conf`、4 GiB `zstd` zram 与 `90-tb378fc-vm.conf` 低延迟内存回收策略。
   - 新增 WirePlumber `51-tb378fc-bluetooth.conf`（优先启用 AAC / LDAC / SBC-XQ 高码率蓝牙音频）与 `CONFIG_BT_AOSPEXT=y`；`tb378fc-iris-vaapi` 升级至 `0.4.0+git.4125b11-4`（新增 `0007` Chromium VA-API 编码兼容补丁）；合入 `sm8750-waydroid.config` 内核配置片段与国内 NTP 源兜底。

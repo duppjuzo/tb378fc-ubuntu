@@ -1,6 +1,7 @@
 [Unit]
-Description=Lenovo tablet power key for GNOME lock, display off and wake
-After=systemd-logind.service display-manager.service
+Description=Lenovo tablet power key for GNOME lock, display off and wake (standalone fallback)
+After=systemd-logind.service display-manager.service tb378fc-thermal-guard.service
+ConditionPathExists=!/run/tb378fc-system-consolidated
 
 [Service]
 Type=simple

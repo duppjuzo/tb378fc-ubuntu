@@ -1,6 +1,6 @@
 [Unit]
-Description=Lenovo TB378FC Native Power-Profiles, uclamp Scheduler & Thermal/6W Power Controller
-After=dbus.service local-fs.target tb378fc-hw-init.service
+Description=Lenovo TB378FC Consolidated System Daemon (Power-Profiles, Power/Volume Keys, Thermal & ZRAM)
+After=dbus.service systemd-logind.service local-fs.target tb378fc-hw-init.service
 Before=gdm.service display-manager.service
 
 [Service]
@@ -8,7 +8,9 @@ Type=simple
 ExecStart=/usr/local/libexec/tb378fc-thermal-guard.py
 Nice=-5
 CPUQuota=10%
-MemoryMax=64M
+MemoryMax=96M
+RuntimeDirectory=tb378fc-power-key
+RuntimeDirectoryMode=0755
 Restart=always
 RestartSec=2
 

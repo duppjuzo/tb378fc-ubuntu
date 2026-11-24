@@ -16,12 +16,15 @@ net.hadess.PowerProfiles on the system bus with all three native GNOME modes:
     calibrated AC fallback), Iris media step-down, and tight uclamp scheduling.
 """
 import glob
+import importlib.machinery
+import importlib.util
 import os
 from pathlib import Path
 import shutil
 import signal
 import subprocess
 import sys
+import threading
 import time
 import warnings
 
@@ -464,11 +467,91 @@ def apply_user_slice_uclamp(uclamp_cfg: dict[str, tuple[str, str]], cgroup_root:
     return updated
 
 
+
+CONSOLIDATED_MARKER = Path("/run/tb378fc-system-consolidated")
+POWER_KEY_SCRIPT = Path("/usr/local/libexec/tb378fc-power-key.py")
+VOLUME_ORIENT_SCRIPT = Path("/usr/local/libexec/tb378fc-volume-orientation")
+
+
+class ZramRecompressor:
+    """Periodic cold-page zram secondary (lz4 -> zstd) recompression & compaction.
+
+    Uses Linux 7.4 CONFIG_ZRAM_MULTI_COMP sysfs interface without spawning
+    subprocesses:
+      1. Marks resident zram pages idle via /sys/block/zram0/idle ('all').
+      2. On the next interval (120s later), any pages that remained untouched
+         are recompressed to secondary zstd in bounded batches (max_pages=4096
+         for normal idle pages, max_pages=1024 for huge_idle pages), followed
+         by zsmalloc pool compaction (/sys/block/zram0/compact).
+    """
+
+    def __init__(
+        self,
+        zram_dir: Path = Path("/sys/block/zram0"),
+        interval_sec: float = 120.0,
+        min_orig_bytes: int = 8 * 1024 * 1024,
+    ):
+        self.zram_dir = zram_dir
+        self.interval_sec = interval_sec
+        self.min_orig_bytes = min_orig_bytes
+        self.last_check = 0.0
+        self.idle_marked = False
+
+    def poll(self, now_mono: float | None = None) -> bool:
+        if now_mono is None:
+            now_mono = time.monotonic()
+        if self.last_check and (now_mono - self.last_check) < self.interval_sec:
+            return False
+        self.last_check = now_mono
+
+        mm_stat = self.zram_dir / "mm_stat"
+        idle_path = self.zram_dir / "idle"
+        recomp_path = self.zram_dir / "recompress"
+        compact_path = self.zram_dir / "compact"
+        if not (mm_stat.is_file() and idle_path.exists() and recomp_path.exists()):
+            return False
+
+        try:
+            fields = mm_stat.read_text(encoding="utf-8").split()
+            orig_bytes = int(fields[0]) if fields else 0
+        except (OSError, ValueError):
+            return False
+
+        if orig_bytes < self.min_orig_bytes:
+            self.idle_marked = False
+            return False
+
+        did_recomp = False
+        if self.idle_marked:
+            write_sysfs(recomp_path, "type=idle max_pages=4096")
+            write_sysfs(recomp_path, "type=huge_idle max_pages=1024")
+            if compact_path.exists():
+                write_sysfs(compact_path, "1")
+            did_recomp = True
+
+        if write_sysfs(idle_path, "all"):
+            self.idle_marked = True
+        return did_recomp
+
+
+def _load_companion_module(mod_name: str, path: Path):
+    loader = importlib.machinery.SourceFileLoader(mod_name, str(path))
+    spec = importlib.util.spec_from_loader(mod_name, loader)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"Cannot load {path}")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
 class ThermalGuardDaemon:
     def __init__(self):
         self.state = ProfileState()
         self.power_ctrl = PowerCapController()
         self.media_det = IrisMediaDetector()
+        self.zram_recomp = ZramRecompressor()
+        self.companion_stop = threading.Event()
+        self.companion_threads: list[threading.Thread] = []
 
         self.boost_path = Path("/sys/devices/system/cpu/cpufreq/boost")
         self.p0_max_path = Path("/sys/devices/system/cpu/cpufreq/policy0/scaling_max_freq")
@@ -790,6 +873,8 @@ class ThermalGuardDaemon:
             self.last_uclamp_profile = profile
             self.last_uclamp_refresh = now
 
+        self.zram_recomp.poll(now)
+
         max_mc = self._read_max_cpu_temp()
         stages = cfg["thermal_stages"]
         new_stage = next_stage(self.stage, max_mc, stages)
@@ -856,13 +941,50 @@ class ThermalGuardDaemon:
 
         return True
 
+    def _start_companions(self) -> None:
+        try:
+            CONSOLIDATED_MARKER.write_text(f"{os.getpid()}\n", encoding="utf-8")
+        except OSError:
+            pass
+
+        def _supervised(label: str, path: Path, entry_fn: str) -> None:
+            try:
+                mod = _load_companion_module(f"tb378fc_comp_{label.replace('-', '_')}", path)
+                fn = getattr(mod, entry_fn)
+            except Exception as exc:
+                print(f"tb378fc-thermal-guard: failed to load {label}: {exc}", flush=True)
+                return
+            while not self.companion_stop.is_set():
+                try:
+                    fn(stop_event=self.companion_stop)
+                except Exception as exc:
+                    if not self.companion_stop.is_set():
+                        print(f"tb378fc-thermal-guard: {label} worker retry after: {exc}", flush=True)
+                        self.companion_stop.wait(2.0)
+
+        for label, script_path, fn_name in (
+            ("power-key", POWER_KEY_SCRIPT, "run_power_key_loop"),
+            ("volume-orientation", VOLUME_ORIENT_SCRIPT, "run_volume_router_loop"),
+        ):
+            if script_path.is_file():
+                t = threading.Thread(
+                    target=_supervised,
+                    args=(label, script_path, fn_name),
+                    name=f"tb378fc-{label}",
+                    daemon=True,
+                )
+                t.start()
+                self.companion_threads.append(t)
+
     def run(self) -> int:
+        self._start_companions()
         self.setup_dbus()
         self.tick()
         if GLib is not None:
             self.loop = GLib.MainLoop()
 
             def _stop(*_args):
+                self.companion_stop.set()
                 if self.loop is not None:
                     self.loop.quit()
 
@@ -879,6 +1001,7 @@ class ThermalGuardDaemon:
             def _stop_plain(*_args):
                 nonlocal running
                 running = False
+                self.companion_stop.set()
 
             signal.signal(signal.SIGTERM, _stop_plain)
             signal.signal(signal.SIGINT, _stop_plain)
@@ -891,6 +1014,13 @@ class ThermalGuardDaemon:
         return 0
 
     def _cleanup(self) -> None:
+        self.companion_stop.set()
+        for t in self.companion_threads:
+            t.join(timeout=1.5)
+        try:
+            CONSOLIDATED_MARKER.unlink(missing_ok=True)
+        except OSError:
+            pass
         # Leave system in safe balanced defaults on service shutdown
         bal = PROFILE_CONFIG["balanced"]["caps"]
         write_sysfs(self.p0_max_path, str(snap_opp(bal[0], self.p0_opps)))

@@ -1,5 +1,6 @@
 [Unit]
-Description=Rotate stereo/quad output across Lenovo TB378FC's four speakers
+Description=Rotate stereo/quad output across Lenovo TB378FC's four speakers (standalone fallback)
+ConditionPathExists=!/usr/local/libexec/tb378fc-v4l2-camera-bridge.py
 After=pipewire.service wireplumber.service
 PartOf=graphical-session.target pipewire.service
 

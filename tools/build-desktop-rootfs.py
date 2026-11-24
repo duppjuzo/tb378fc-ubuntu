@@ -420,7 +420,7 @@ def main() -> int:
             "rsyslog.service", "syslog.socket", "kdump-tools.service",
             "cups.service", "cups.socket", "cups.path", "cups-browsed.service",
             "speech-dispatcherd.service", "gnome-remote-desktop.service",
-            "avahi-daemon.service", "avahi-daemon.socket", "geoclue.service",
+            "avahi-daemon.service", "avahi-daemon.socket unattended-upgrades.service", "geoclue.service",
         ]
         subprocess.run(["chroot", str(root), "systemctl", "disable", *disable_units], check=False, env=env)
 

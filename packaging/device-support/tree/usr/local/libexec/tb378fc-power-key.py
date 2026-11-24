@@ -227,27 +227,32 @@ def toggle(wake_input, resumed=False):
     suspend()
 
 
-def main():
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('device', type=Path, nargs='?', help='Power-key evdev node; defaults to this board pmic_pwrkey')
-    args = parser.parse_args()
-    if args.device is None:
-        devices = [p for p in Path('/sys/class/input').glob('event*')
-                   if (p/'device/name').is_file() and (p/'device/name').read_text().strip() == 'pmic_pwrkey']
-        if len(devices) != 1:
-            parser.error('expected one pmic_pwrkey device')
-        args.device = Path('/dev/input') / devices[0].name
-    if not re.fullmatch(r'/dev/input/event\d+', str(args.device)):
-        parser.error('expected /dev/input/eventN')
-    fd = os.open(args.device, os.O_RDONLY | os.O_NONBLOCK)
+def discover_power_key_device() -> Path:
+    devices = [
+        p for p in Path('/sys/class/input').glob('event*')
+        if (p / 'device/name').is_file() and (p / 'device/name').read_text().strip() == 'pmic_pwrkey'
+    ]
+    if len(devices) != 1:
+        raise RuntimeError('expected one pmic_pwrkey device')
+    return Path('/dev/input') / devices[0].name
+
+
+def run_power_key_loop(stop_event=None, device: Path | None = None) -> None:
+    if device is None:
+        device = discover_power_key_device()
+    if not re.fullmatch(r'/dev/input/event\d+', str(device)):
+        raise RuntimeError(f'expected /dev/input/eventN, got {device}')
+    fd = os.open(device, os.O_RDONLY | os.O_NONBLOCK)
     wake_input = None
     try:
         fcntl.ioctl(fd, EVIOCGRAB, 1)
         wake_input = WakeInput()
-        report(f'power key: listening on {args.device}')
+        report(f'power key: listening on {device}')
         pressed = False
-        while True:
-            select.select([fd], [], [])
+        while stop_event is None or not stop_event.is_set():
+            ready, _, _ = select.select([fd], [], [], 1.0)
+            if not ready:
+                continue
             data = os.read(fd, EVENT.size * 16)
             if not data:
                 return
@@ -275,6 +280,19 @@ def main():
         if wake_input is not None:
             wake_input.close()
         os.close(fd)  # Releases the exclusive grab, including on service stop.
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('device', type=Path, nargs='?', help='Power-key evdev node; defaults to this board pmic_pwrkey')
+    args = parser.parse_args()
+    try:
+        dev = args.device if args.device is not None else discover_power_key_device()
+    except RuntimeError as exc:
+        parser.error(str(exc))
+    if not re.fullmatch(r'/dev/input/event\d+', str(dev)):
+        parser.error('expected /dev/input/eventN')
+    run_power_key_loop(device=dev)
 
 
 if __name__ == '__main__':

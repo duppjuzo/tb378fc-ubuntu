@@ -249,6 +249,120 @@ def route_keys(resources):
             fcntl.ioctl(virtual, 0x5502)  # UI_DEV_DESTROY
 
 
+
+def read_session_transform(uid: int, gid: int, runtime_dir: str, cache: dict | None = None) -> int:
+    """Read active GNOME display transform (0..3) without a persistent child process.
+
+    Fast path: reads $XDG_RUNTIME_DIR/tb378fc-display-transform written on
+    MonitorsChanged by the consolidated user session daemon (<10 us tmpfs read).
+    Fallback (e.g. GDM greeter): queries Mutter DisplayConfig over gdbus with a
+    short 2s cache.
+    """
+    tf_file = Path(runtime_dir) / 'tb378fc-display-transform'
+    try:
+        raw = tf_file.read_text(encoding='utf-8').strip()
+        val = int(raw)
+        if val in range(4):
+            return val
+    except (OSError, ValueError):
+        pass
+
+    now = time.monotonic()
+    if cache is not None and cache.get('uid') == uid and now - cache.get('ts', 0.0) < 2.0:
+        return int(cache['transform'])
+
+    env = {
+        'PATH': '/usr/bin:/bin',
+        'LANG': 'C.UTF-8',
+        'XDG_RUNTIME_DIR': runtime_dir,
+        'DBUS_SESSION_BUS_ADDRESS': f'unix:path={runtime_dir}/bus',
+    }
+    try:
+        out = subprocess.check_output(
+            [
+                'gdbus', 'call', '--session',
+                '--dest', 'org.gnome.Mutter.DisplayConfig',
+                '--object-path', '/org/gnome/Mutter/DisplayConfig',
+                '--method', 'org.gnome.Mutter.DisplayConfig.GetCurrentState',
+            ],
+            text=True,
+            timeout=3,
+            stderr=subprocess.DEVNULL,
+            user=uid,
+            group=gid,
+            extra_groups=[],
+            env=env,
+        )
+        # Logical monitor tuple ends with (..., uint32 transform, bool primary, [...])
+        import re as _re
+        for m in _re.finditer(r',\s*(?:uint32\s+)?([0-3]),\s*true,\s*\[', out):
+            val = int(m.group(1))
+            if cache is not None:
+                cache.update(uid=uid, ts=now, transform=val)
+            return val
+    except Exception:
+        pass
+    return int(cache.get('transform', 0)) if cache else 0
+
+
+def run_volume_router_loop(stop_event=None) -> None:
+    """In-process volume key orientation router without spawning --watch-display."""
+    if not is_tb378fc_board():
+        raise RuntimeError('Unexpected board')
+    with contextlib.ExitStack() as resources:
+        sources = devices()
+        for fd in sources.values():
+            resources.callback(os.close, fd)
+        virtual = os.open('/dev/uinput', os.O_WRONLY | os.O_NONBLOCK)
+        resources.callback(os.close, virtual)
+        held = {}
+        tf_cache = {}
+        try:
+            fcntl.ioctl(virtual, 0x40045564, 1)  # UI_SET_EVBIT EV_KEY
+            for code in KEYS:
+                fcntl.ioctl(virtual, 0x40045565, code)
+            setup = struct.pack('HHHH80sI', 3, 0x17EF, 0x378F, 1, NAME.encode(), 0)
+            fcntl.ioctl(virtual, 0x405C5503, setup)
+            fcntl.ioctl(virtual, 0x5501)  # UI_DEV_CREATE
+            time.sleep(0.2)
+            for fd in sources.values():
+                fcntl.ioctl(fd, 0x40044590, 1)  # EVIOCGRAB
+            print('VOLUME_PROXY_READY mode=in-process', flush=True)
+            while stop_event is None or not stop_event.is_set():
+                ready, _, _ = select.select([*sources.values()], [], [], 1.0)
+                if not ready:
+                    continue
+                transform = 0
+                try:
+                    uid, gid, runtime_dir = active_graphical_session()
+                    transform = read_session_transform(uid, gid, runtime_dir, tf_cache)
+                except Exception:
+                    transform = int(tf_cache.get('transform', 0))
+                for fd in ready:
+                    data = os.read(fd, EVENT.size * 32)
+                    if not data or len(data) % EVENT.size:
+                        raise RuntimeError('Input disconnected')
+                    for _, _, kind, code, value in EVENT.iter_unpack(data):
+                        if kind == 0 and code == 3:
+                            raise RuntimeError('Input stream overflow')
+                        if kind != 1 or code not in KEYS:
+                            continue
+                        key = (fd, code)
+                        if value == 1:
+                            held[key] = 229 - code if transform in (0, 3) else code
+                        mapped = held.get(key)
+                        if mapped is not None:
+                            emit(virtual, mapped, value)
+                        if value == 0:
+                            held.pop(key, None)
+        finally:
+            for mapped in held.values():
+                with contextlib.suppress(OSError):
+                    emit(virtual, mapped, 0)
+            with contextlib.suppress(OSError):
+                fcntl.ioctl(virtual, 0x5502)  # UI_DEV_DESTROY
+
+
 if __name__ == '__main__':
     def stop(*_):
         raise SystemExit(0)

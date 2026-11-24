@@ -7,6 +7,8 @@ a persistent `pw-dump --monitor` stream, and keeps the smart-filter input node
 at unity volume (1.0) so WirePlumber never leaves hidden attenuation on it.
 '''
 import json
+import os
+from pathlib import Path
 import subprocess
 import sys
 
@@ -118,9 +120,22 @@ class SpeakerRotation:
             return False
         return self.retry_attempts < 30
 
+    def publish_transform(self, transform):
+        rdir = os.environ.get("XDG_RUNTIME_DIR") or f"/run/user/{os.geteuid()}"
+        target = Path(rdir) / "tb378fc-display-transform"
+        tmp = Path(rdir) / "tb378fc-display-transform.tmp"
+        try:
+            tmp.write_text(f"{int(transform) & 3}\n", encoding="utf-8")
+            os.chmod(tmp, 0o644)
+            tmp.replace(target)
+        except OSError:
+            pass
+
     def update(self):
         try:
-            self.set_matrix(self.internal_transform())
+            tf = self.internal_transform()
+            self.publish_transform(tf)
+            self.set_matrix(tf)
             return True
         except Exception as exc:
             print(f"speaker-rotation deferred: {exc}", file=sys.stderr, flush=True)

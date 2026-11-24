@@ -1,0 +1,5 @@
+[Desktop Entry]
+Type=Application
+Name=Update Notifier
+Exec=update-notifier
+Hidden=true

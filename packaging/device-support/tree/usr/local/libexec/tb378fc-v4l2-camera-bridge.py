@@ -276,24 +276,16 @@ class VirtualCameraChannel:
             self.fd = None
 
 
-def main() -> int:
-    uid = os.geteuid()
-    if uid < 1000 or uid >= 60000:
-        return 0
-    running = True
+SPEAKER_ROTATION_BIN = Path("/usr/libexec/tb378fc-speaker-rotation")
+SPEAKER_ROTATION_CFG = Path("/usr/share/tb378fc-audio/speaker-rotation/config.json")
 
-    def _stop(*_args):
-        nonlocal running
-        running = False
 
-    signal.signal(signal.SIGTERM, _stop)
-    signal.signal(signal.SIGINT, _stop)
-
+def run_v4l2_bridge(stop_ev: threading.Event) -> int:
     # Wait briefly for v4l2loopback nodes to appear at boot
     for _ in range(20):
-        if any(Path(spec[0]).exists() for spec in CAMERA_SPECS):
+        if stop_ev.is_set() or any(Path(spec[0]).exists() for spec in CAMERA_SPECS):
             break
-        time.sleep(0.5)
+        stop_ev.wait(0.5)
 
     channels: dict[int, VirtualCameraChannel] = {}
     poller = select.poll()
@@ -307,13 +299,13 @@ def main() -> int:
             print(f"tb378fc-v4l2-camera-bridge: failed to open {dev_path}: {exc}", flush=True)
 
     if not channels:
-        print("tb378fc-v4l2-camera-bridge: no v4l2loopback devices available; exiting", flush=True)
+        print("tb378fc-v4l2-camera-bridge: no v4l2loopback devices available", flush=True)
         return 1
 
     try:
-        while running:
+        while not stop_ev.is_set():
             has_pending_idle = any(ch.idle_since is not None for ch in channels.values())
-            timeout_ms = 250 if has_pending_idle else 2000
+            timeout_ms = 250 if has_pending_idle else 1500
             try:
                 events = poller.poll(timeout_ms)
             except InterruptedError:
@@ -347,6 +339,61 @@ def main() -> int:
         for ch in channels.values():
             ch.close()
     return 0
+
+
+def main() -> int:
+    uid = os.geteuid()
+    if uid < 1000 or uid >= 60000:
+        return 0
+
+    stop_ev = threading.Event()
+
+    # Host quad-speaker rotation + display-transform publisher in the same
+    # user-session Python process when tb378fc-audio is installed.
+    if SPEAKER_ROTATION_BIN.is_file() and SPEAKER_ROTATION_CFG.is_file():
+        try:
+            import importlib.machinery
+            import importlib.util
+            from gi.repository import GLib
+
+            loader = importlib.machinery.SourceFileLoader("tb378fc_speaker_rotation", str(SPEAKER_ROTATION_BIN))
+            spec = importlib.util.spec_from_loader("tb378fc_speaker_rotation", loader)
+            if spec and spec.loader:
+                sr_mod = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(sr_mod)
+                cfg = json.loads(SPEAKER_ROTATION_CFG.read_text(encoding="utf-8"))
+                sr_daemon = sr_mod.SpeakerRotation(cfg)
+                if not sr_daemon.update():
+                    GLib.timeout_add(500, sr_daemon.retry)
+
+                cam_thread = threading.Thread(
+                    target=run_v4l2_bridge, args=(stop_ev,), name="tb378fc-v4l2-bridge", daemon=True
+                )
+                cam_thread.start()
+
+                loop = GLib.MainLoop()
+
+                def _quit(*_args):
+                    stop_ev.set()
+                    loop.quit()
+
+                signal.signal(signal.SIGTERM, _quit)
+                signal.signal(signal.SIGINT, _quit)
+                try:
+                    loop.run()
+                finally:
+                    stop_ev.set()
+                    cam_thread.join(timeout=2.0)
+                return 0
+        except Exception as exc:
+            print(f"tb378fc-v4l2-camera-bridge: speaker-rotation in-process init skipped: {exc}", flush=True)
+
+    def _stop(*_args):
+        stop_ev.set()
+
+    signal.signal(signal.SIGTERM, _stop)
+    signal.signal(signal.SIGINT, _stop)
+    return run_v4l2_bridge(stop_ev)
 
 
 if __name__ == "__main__":
