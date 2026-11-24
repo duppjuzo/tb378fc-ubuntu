@@ -365,7 +365,16 @@ class TestUfsMemoryOomdAndSecurityCenter(unittest.TestCase):
         self.assertIn('glib-compile-schemas', bdebs)
         self.assertIn('/usr/share/gdm/generate-config', bdebs)
         sens = (ROOT / 'packaging/sensors/tb378fc-sensord.c').read_text(encoding='utf-8')
-        self.assertIn('fmax(2.0, stream->self->light * 0.08)', sens)
+        self.assertIn('!s->light_valid', sens)
+        self.assertIn('value == 0.0 && s->light > 0.0', sens)
+        self.assertIn('fmax(0.5, s->light * 0.05)', sens)
+        ov_conf = (ROOT / 'packaging/device-support/tree/etc/systemd/user/org.gnome.Shell@.service.d/90-tb378fc-touchguard.conf').read_text(encoding='utf-8')
+        self.assertIn('G_RESOURCE_OVERLAYS=/org/gnome/shell=/usr/local/share/tb378fc/gnome-shell', ov_conf)
+        bm_js = (ROOT / 'packaging/device-support/tree/usr/local/share/tb378fc/gnome-shell/misc/brightnessManager.js').read_text(encoding='utf-8')
+        self.assertIn('TB378FC_ALS_LUT', bm_js)
+        self.assertIn('BRIGHTEN_DEBOUNCE_MS = 1800', bm_js)
+        self.assertIn('DARKEN_DEBOUNCE_MS = 900', bm_js)
+        self.assertIn('applyUserBias', bm_js)
 
 
     def test_bluetooth_aac_wireplumber_bqr_and_kconfig(self):

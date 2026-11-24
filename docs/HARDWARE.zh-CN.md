@@ -17,7 +17,7 @@
 | USB-C & DP 音视频输出 | `dwc3-qcom` (`mode-switch` `0014`) + `ucsi_glink` + `mdss_dp0` + DP0 Audio (`0013` + `0014`) | **正常**：USB Host/Gadget、外接 5K 4-lane DP 显示器扩展桌面、热拔插防死机及 DP 数字音频输出正常 |
 | 相机（前 8MP / 后 13MP） | `gc08a8` + `ov13b10` + `dw9807-vcm` (`0007`) + 横屏旋转 (`0012`) + `tb378fc-libcamera 0.7.2-0.2.2` + `v4l2loopback` | **正常**：前后摄画面方向正确，后摄 CDAF 自动对焦正常，休眠无镜头弹响，支持 V4L2 虚拟摄像头桥接 |
 | 后置闪光灯 / 手电筒 | `leds-qcom-flash` (`pm8550_flash`) + `tb378fc-torch` | **正常**：动态 `seat0` / `video` 组鉴权控制正常 |
-| 传感器与磁吸皮套 | `tb378fc-sensors 0.2.2` (`hexagonrpcd` + `sensh` + `tb378fc-sensord`) | **正常**：四向重力自动旋转、磁吸皮套霍尔合盖 `s2idle` 休眠/开盖唤醒、环境光迟滞上报（零空闲唤醒，可在设置中按需开启自动亮度） |
+| 传感器与磁吸皮套 | `tb378fc-sensors 0.2.3` (`hexagonrpcd` + `sensh` + `tb378fc-sensord`) | **正常**：四向重力自动旋转、磁吸皮套霍尔合盖 `s2idle` 休眠/开盖唤醒、真实物理 `lux` 上报 + GNOME Shell 原生绝对照度 LUT 自适应背光（抗眩光防抖、关灯 `0 lux` 丝滑降到底、四向旋转零漂移） |
 | Wi-Fi 7 & 蓝牙 | WCN7860 (`ath12k` + `btqca` `0010`/`0014` + AOSP BQR + WirePlumber AAC/LDAC) | **正常**：Wi-Fi 7 高速连接、蓝牙高清音频与蓝牙键鼠/触屏键盘共存正常 |
 | 内部存储与内存管理 | UFS 4.0 MCQ + UFS HWMON + MGLRU + zram (`tb378fc-zram`) | **正常**：8GB 专用安全保留内存布局（`ramoops@c2000000`），低写放大 journald/I/O 调度 |
 | 电池、充电、睿频与温控 | `qcom_battmgr` (`0006`/`0014`) + `schedutil` **4.32 GHz** Prime 睿频 (`0014`) + Oryon 118°C 被动降频 + 三档温控 | **正常**：充放电功率/电量显示正常，实机达成 4.32 GHz 单核睿频，支持省电/平衡/性能三档温控与持久化 |

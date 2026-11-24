@@ -8,6 +8,7 @@
    - 刷入合入补丁 `0014` 与精简早期 initramfs 的 GKI v4 启动三件套后执行冷重启：`dmesg` 中 `nt36536` 报错数为 `0`，`IRQ 207/209` 进桌面立即就绪，彻底消除开机需息屏重亮才能恢复触控的问题；同时消除了早期 Adreno 830 GMU OOB 5 秒超时。
    - 在 GNOME 50 Wayland 会话同时打开多个应用窗口及 Google Chrome 地址栏/网页输入框进行触屏点击测试：虚拟键盘在客户端窗口（`global.stage`）与 Chrome（Wayland Text Input v3）中均稳定自动弹出与收起，蓝牙外设共存逻辑正常。
    - `schedutil` + `boost=1` 下实机单核负载观测到 CPU6/CPU7 升频至 **4,320,000 kHz（4.32 GHz）**；`a600000.usb-mux` 注册正常，`109ab000.tn` 已禁用，`systemctl --failed` 为 `0` 失败单元。
+   - 自动屏幕亮度根治验证（`tb378fc-sensors 0.2.3` + `misc/brightnessManager.js`）：实机验证 `SetAutoBrightnessTarget(0.99)` 错误线性输出已旁路；`0.6s` `3000 lux` 瞬时强光冲击背光变化为 `0`（抗眩光防抖生效）；持续 `600 lux` 平滑升至 `1885/4095` (`46.0%`)；单次 `0.0 lux` 关灯事件（后续零信号）依靠内置 30 Hz 插值时钟平滑降至 `113/4095` (`2.8%`)，四向屏幕旋转背光漂移为 `0`。
    - 常驻内存精简与 `zram` 二级重压缩验证（保留 `snapd` 与应用中心）：全系统常驻 Python 守护进程由 7 个收敛至 **2 个**（系统级 `tb378fc-thermal-guard` + 会话级 `tb378fc-v4l2-camera-bridge`），`fwupd` 切换为 `--timed-exit` 按需唤醒退出，桌面用户态总 `PSS` 实测由 `1979.0 MiB` 降至 **`1812.9 MiB`（净省 `166.1 MiB`）**，`MemAvailable` 升至 `7695 MiB`。
 2. **联想 TB378FC 磁吸触点键盘驱动（补丁 `0015`）分级验证记录**：
    - **离线验证（已通过）**：64 字节旋转 XOR 加扰/解扰、PPP 帧编解码、按键/四指触控板协议单测、`checkpatch.pl`（0 错误/0 警告）、`dt-doc-validate`（0 错误）与 `-Werror` 编译全部通过。

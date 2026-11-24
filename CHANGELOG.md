@@ -15,6 +15,7 @@
 - **内核日志降噪与 PMIC/音频细节打磨**：静默 `btqca` 可选固件探测告警、为 `lenovo,tb378fc-pmic-glink` 标记 `QCOM_BATTMGR_QUIRK_NO_CHARGE_CONTROL` 消除不支持的 `0x48` 报错，并补齐 `wcd939x` MBHC 阈值与 `lpass_vamacro` 采样率属性。
 
 ### GNOME 50 多窗口 / Chrome 触控屏幕键盘与全栈桌面优化（`0.6.6`）
+  - **根治 GNOME 50 自动屏幕亮度暴冲与暗室降不下去的问题（`tb378fc-sensors 0.2.3` + `brightnessManager.js`）**：`tb378fc-sensord.c` 保持 100% 真实物理 `lux` 输出并修复 `0.0 lux` 过渡漏报与全黑静默逻辑；新增 GNOME Shell `/org/gnome/shell/misc/brightnessManager.js` 原生自动亮度控制器覆盖，旁路 `gsd-power` 存在缺陷的单点线性归一化（`norm = 1.5 * lux`）与 `<= 0.0 lux` 丢弃逻辑，改用针对双路 `AW99706B`（`40..4095`）标定的绝对物理照度对数插值 LUT、Android 级非对称防抖（升亮 1.8s 抗白屏/眩光突变、降亮 0.9s 防手影）与独立 30 Hz 平滑渐变时钟，并修复四向旋转（`_monitorsChanged`）篡改亮度偏置的棘轮缺陷。
 - **彻底修复 GNOME 50 多窗口与 Chrome/Chromium 触屏无法呼出屏幕键盘（OSK）**：
   - 重写 `packaging/device-support/tree/usr/local/share/tb378fc/gnome-shell/ui/keyboard.js` 触控焦点追踪：同时在 `global.stage` 与 `Main.uiGroup` 捕获触屏轻点事件（覆盖位于 `global.window_group` 的普通桌面客户端窗口），兼容单次 `zwp_text_input_v3.enable()` 会话模型，并修复连接蓝牙键鼠外设时触屏点击仍可自动弹出虚拟键盘。
   - 在 `/etc/chromium.d/tb378fc-wayland-vaapi` 与新增 `/usr/local/libexec/tb378fc-sync-chrome-vaapi`（含 APT `DPkg::Post-Invoke` 钩子）自动注入 `--enable-wayland-ime --wayland-text-input-version=3`，使 Google Chrome / Chromium 原生走 Wayland Text Input v3 协议唤醒虚拟键盘。

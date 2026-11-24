@@ -418,6 +418,7 @@ def main() -> int:
         "    if [ -d /run/systemd/system ]; then\n"
         "        systemctl daemon-reload || true\n"
         "        udevadm control --reload-rules || true\n"
+        "        systemctl try-restart tb378fc-sensord.service >/dev/null 2>&1 || true\n"
         "    fi\n"
         "fi\n"
         "exit 0\n",

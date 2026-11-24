@@ -75,6 +75,7 @@ struct Sensord {
 	guint reg_id;
 
 	gboolean has_light;
+	gboolean light_valid;
 	gboolean light_claimed;
 	gdouble light;
 	gboolean has_accel;
@@ -472,12 +473,23 @@ static void read_stream_cb(GObject *source, GAsyncResult *res, gpointer user_dat
 		p += strlen("sensor data:");
 		if (stream->type == STREAM_LIGHT) {
 			gdouble value = g_ascii_strtod(p, NULL);
-			if (value >= 0.0) {
-				set_has_light(stream->self, TRUE);
-				gdouble threshold = fmax(2.0, stream->self->light * 0.08);
-				if (fabs(value - stream->self->light) >= threshold || stream->self->light == 0.0) {
-					stream->self->light = value;
-					emit_property(stream->self, "LightLevel",
+			if (isfinite(value) && value >= 0.0) {
+				Sensord *s = stream->self;
+				set_has_light(s, TRUE);
+				/*
+				 * Report true factory-calibrated SI lux with adaptive deadband:
+				 *  - Always emit the first valid sample (!s->light_valid).
+				 *  - Always emit transitions to 0.0 lux from any >0 reading so
+				 *    pitch-dark rooms are never trapped behind the deadband.
+				 *  - Never spam 5 Hz signals when steady at 0.0 lux.
+				 */
+				gdouble threshold = fmax(0.5, s->light * 0.05);
+				if (!s->light_valid ||
+				    (value == 0.0 && s->light > 0.0) ||
+				    fabs(value - s->light) >= threshold) {
+					s->light = value;
+					s->light_valid = TRUE;
+					emit_property(s, "LightLevel",
 						      g_variant_new_double(value));
 				}
 			}
@@ -686,7 +698,7 @@ static void method_call(GDBusConnection *connection, const gchar *sender,
 			self->accel_claimed = FALSE;
 		} else if (g_strcmp0(method_name, "ClaimLight") == 0) {
 			self->light_claimed = TRUE;
-			if (self->has_light)
+			if (self->has_light && self->light_valid)
 				emit_property(self, "LightLevel",
 					      g_variant_new_double(self->light));
 		} else if (g_strcmp0(method_name, "ReleaseLight") == 0) {
