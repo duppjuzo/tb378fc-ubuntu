@@ -1,0 +1,3 @@
+# TB378FC WCN7860 PCIe root port (gpio104 is active-low pull-up; older DTBs used
+# GPIO_ACTIVE_HIGH which triggers immediate spurious s2idle wake on IRQ 218).
+ACTION=="add", SUBSYSTEM=="pci", KERNEL=="0000:00:00.0", ATTR{power/wakeup}="disabled"

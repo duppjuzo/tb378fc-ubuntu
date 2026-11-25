@@ -151,6 +151,23 @@ def main() -> int:
     )
     lc.write_text(lc_txt, encoding="utf-8")
 
+    # Use SNS_CLIENT_DELIVERY_NO_WAKEUP (1) for continuous config streams (msg_id == 513:
+    # accel/light) so ADSP does not wake APPS during s2idle; keep WAKEUP (0) for on-change
+    # watch (msg_id == 514: Hall lid) and discovery/attribute requests.
+    sc = sroot / "sensh/sensh.c"
+    sc_txt = sc.read_text(encoding="utf-8")
+    target = "	pm_config.delivery_type = 0;"
+    replacement = (
+        "	/* Non-wakeup delivery (1) for continuous config streams (513) prevents ADSP\n"
+        "	 * from waking APPS during s2idle; keep WAKEUP (0) for watch (514) / queries. */\n"
+        "	pm_config.delivery_type = (msg_id == 513) ? 1 : 0;"
+    )
+    if target not in sc_txt and replacement not in sc_txt:
+        raise RuntimeError(f"Expected delivery_type assignment not found in {sc}")
+    if target in sc_txt:
+        sc_txt = sc_txt.replace(target, replacement, 1)
+        sc.write_text(sc_txt, encoding="utf-8")
+
     # 1. Build native host qmic code generator
     host_bin = work / "host-bin"
     host_bin.mkdir(parents=True, exist_ok=True)

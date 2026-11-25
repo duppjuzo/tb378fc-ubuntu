@@ -71,8 +71,11 @@ def suspended_since_last_press():
     return not stale
 
 
-def command(argv, **kwargs):
-    result = subprocess.run(argv, text=True, capture_output=True, timeout=8, **kwargs)
+TOGGLE_DEBOUNCE_S = 0.6
+
+
+def command(argv, timeout=8, **kwargs):
+    result = subprocess.run(argv, text=True, capture_output=True, timeout=timeout, **kwargs)
     if result.returncode:
         raise RuntimeError(result.stderr.strip() or f'{argv[0]} failed')
     return result.stdout.strip()
@@ -89,10 +92,11 @@ def active_session():
         raise RuntimeError('active session is not a graphical desktop')
     if info.get('Class') not in ('user', 'user-early', 'greeter'):
         raise RuntimeError('unsupported graphical session class')
+    info['SessionId'] = sid
     return info
 
 
-def call_session(info, dest, path, method, *args):
+def call_session(info, dest, path, method, *args, timeout=8):
     uid = int(info['User'])
     account = pwd.getpwuid(uid)
     runtime = f'/run/user/{uid}'
@@ -100,13 +104,29 @@ def call_session(info, dest, path, method, *args):
            'XDG_RUNTIME_DIR': runtime,
            'DBUS_SESSION_BUS_ADDRESS': f'unix:path={runtime}/bus'}
     return command(['gdbus', 'call', '--session', '--dest', dest, '--object-path',
-                    path, '--method', method, *args], user=uid, group=account.pw_gid,
-                   extra_groups=[], env=env)
+                    path, '--method', method, *args], timeout=timeout,
+                   user=uid, group=account.pw_gid, extra_groups=[], env=env)
 
 
-def screensaver(info, method, *args):
+def screensaver(info, method, *args, timeout=8):
     return call_session(info, 'org.gnome.ScreenSaver', '/org/gnome/ScreenSaver',
-                        f'org.gnome.ScreenSaver.{method}', *args)
+                        f'org.gnome.ScreenSaver.{method}', *args, timeout=timeout)
+
+
+def is_locked(info):
+    try:
+        if screensaver(info, 'GetActive', timeout=2) == '(true,)':
+            return True
+    except (RuntimeError, subprocess.TimeoutExpired):
+        pass
+    sid = info.get('SessionId')
+    if sid:
+        try:
+            if command(['loginctl', 'show-session', sid, '-p', 'LockedHint', '--value'], timeout=2) == 'yes':
+                return True
+        except (RuntimeError, subprocess.TimeoutExpired):
+            pass
+    return False
 
 
 # Opt-in system suspend. Written by whoever enables it (an image default or the
@@ -212,16 +232,25 @@ def toggle(wake_input, resumed=False):
         report(f'power key: display off via {via} (greeter)')
         suspend()
         return
-    # Lock waits for an active-state transition; a stale logind hint can
-    # otherwise leave a repeated Lock call waiting on an already active shield.
-    if screensaver(info, 'GetActive') != '(true,)':
-        screensaver(info, 'Lock')
-
-    deadline = time.monotonic() + 3
-    while screensaver(info, 'GetActive') != '(true,)':
-        if time.monotonic() >= deadline:
-            raise RuntimeError('GNOME did not activate the lock/greeter screen')
-        time.sleep(0.05)
+    # Trigger session lock non-blockingly via logind rather than blocking on
+    # ScreenSaver.Lock (which can stall 8s during shield animation transitions).
+    if not is_locked(info):
+        command(['loginctl', 'lock-session', info['SessionId']], timeout=3)
+        start = time.monotonic()
+        deadline = start + 2.5
+        fallback_sent = False
+        while not is_locked(info):
+            now = time.monotonic()
+            if not fallback_sent and now - start >= 1.0:
+                fallback_sent = True
+                try:
+                    screensaver(info, 'SetActive', 'true', timeout=2)
+                except (RuntimeError, subprocess.TimeoutExpired):
+                    pass
+            if now >= deadline:
+                report('power key: lock confirmation timed out; blanking anyway')
+                break
+            time.sleep(0.05)
     display_mode(info, 3)
     report(f'power key: display off via {via} ({info["Class"]})')
     suspend()
@@ -237,6 +266,21 @@ def discover_power_key_device() -> Path:
     return Path('/dev/input') / devices[0].name
 
 
+def drain_events(fd):
+    """Discard any queued evdev events accumulated during a lock or resume transition."""
+    while True:
+        try:
+            chunk = os.read(fd, EVENT.size * 64)
+            if not chunk:
+                break
+        except BlockingIOError:
+            break
+        except OSError as exc:
+            if exc.errno in (11, 35):  # EAGAIN / EWOULDBLOCK
+                break
+            raise
+
+
 def run_power_key_loop(stop_event=None, device: Path | None = None) -> None:
     if device is None:
         device = discover_power_key_device()
@@ -249,6 +293,7 @@ def run_power_key_loop(stop_event=None, device: Path | None = None) -> None:
         wake_input = WakeInput()
         report(f'power key: listening on {device}')
         pressed = False
+        last_toggle_at = -TOGGLE_DEBOUNCE_S
         while stop_event is None or not stop_event.is_set():
             ready, _, _ = select.select([fd], [], [], 1.0)
             if not ready:
@@ -269,13 +314,23 @@ def run_power_key_loop(stop_event=None, device: Path | None = None) -> None:
                         # release together with the wake; act once per read.
                         continue
                     handled = True
+                    resumed = suspended_since_last_press()
+                    now = time.monotonic()
+                    if not resumed and (now - last_toggle_at) < TOGGLE_DEBOUNCE_S:
+                        drain_events(fd)
+                        continue
                     STATUS['presses'] += 1
+                    last_toggle_at = now
                     # The suspend cycle flag is authoritative and is consumed
                     # here, once per handled press.
                     try:
-                        toggle(wake_input, suspended_since_last_press())
+                        toggle(wake_input, resumed)
                     except (RuntimeError, OSError, subprocess.TimeoutExpired) as error:
                         report(f'power key: {error}')
+                    finally:
+                        last_toggle_at = time.monotonic()
+                        drain_events(fd)
+                        pressed = False
     finally:
         if wake_input is not None:
             wake_input.close()

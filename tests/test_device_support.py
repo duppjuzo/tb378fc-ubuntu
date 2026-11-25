@@ -616,5 +616,75 @@ class TestUfsMemoryOomdAndSecurityCenter(unittest.TestCase):
         self.assertNotIn('disable snapd', bdebs)
         self.assertNotIn('mask snapd', bdebs)
 
+
+
+class TestPowerKeyAndUnitHygiene(unittest.TestCase):
+    def test_power_key_nonblocking_lock_and_debounce(self):
+        pk = load_script('tb378fc_power_key_test', 'tb378fc-power-key.py')
+        src = (ROOT / 'packaging/device-support/tree/usr/local/libexec/tb378fc-power-key.py').read_text(encoding='utf-8')
+        self.assertIn("loginctl', 'lock-session'", src)
+        self.assertNotIn("screensaver(info, 'Lock')", src)
+
+        fake_info = {'User': '1000', 'Class': 'user', 'Type': 'wayland', 'Active': 'yes', 'SessionId': '2'}
+        wake_mock = mock.MagicMock()
+        calls = []
+
+        def fake_cmd(argv, timeout=8, **kwargs):
+            calls.append(argv)
+            return ''
+
+        # Even if is_locked never confirms within deadline, toggle still blanks + calls suspend
+        with mock.patch.object(pk, 'active_session', return_value=fake_info), \
+             mock.patch.object(pk, 'mutter_mode', side_effect=[0, 3]) as mm_mock, \
+             mock.patch.object(pk, 'is_locked', return_value=False), \
+             mock.patch.object(pk, 'command', side_effect=fake_cmd), \
+             mock.patch.object(pk, 'screensaver') as ss_mock, \
+             mock.patch.object(pk, 'suspend') as susp_mock, \
+             mock.patch.object(pk, 'report') as rep_mock, \
+             mock.patch.object(pk.time, 'sleep', return_value=None), \
+             mock.patch.object(pk.time, 'monotonic', side_effect=[0.0, 0.2, 1.1, 2.6]):
+            pk.toggle(wake_mock, resumed=False)
+
+        self.assertIn(['loginctl', 'lock-session', '2'], calls)
+        ss_mock.assert_called_once_with(fake_info, 'SetActive', 'true', timeout=2)
+        mm_mock.assert_any_call(fake_info, 3)
+        susp_mock.assert_called_once()
+        rep_mock.assert_any_call('power key: lock confirmation timed out; blanking anyway')
+
+        # Resumed wake always wakes display and suppresses suspend
+        with mock.patch.object(pk, 'active_session', return_value=fake_info), \
+             mock.patch.object(pk, 'mutter_mode') as mm_mock, \
+             mock.patch.object(pk, 'suspend') as susp_mock, \
+             mock.patch.object(pk, 'report'):
+            pk.toggle(wake_mock, resumed=True)
+        mm_mock.assert_called_once_with(fake_info, 0)
+        wake_mock.wake.assert_called()
+        susp_mock.assert_not_called()
+
+        # drain_events reads until BlockingIOError
+        with mock.patch.object(pk.os, 'read', side_effect=[b'abc', BlockingIOError()]) as rd_mock:
+            pk.drain_events(99)
+        self.assertEqual(rd_mock.call_count, 2)
+
+    def test_sanitize_xkb_dropin_escapes_backrefs(self):
+        xkb = (ROOT / 'packaging/device-support/tree/etc/systemd/system/console-setup.service.d/90-tb378fc-sanitize-xkb.conf').read_text(encoding='utf-8')
+        self.assertIn(r'XKBLAYOUT=\"\\1\"', xkb)
+        self.assertIn(r'XKBVARIANT=\"\\1\"', xkb)
+        import re
+        self.assertIsNone(re.search(r'(?<!\\)\\1', xkb))
+
+
+    def test_s2idle_pcie_wakeup_rule_and_power_key_suspend_action(self):
+        rule = (ROOT / 'packaging/device-support/tree/etc/udev/rules.d/90-tb378fc-pcie-wakeup.rules').read_text(encoding='utf-8')
+        self.assertIn('KERNEL=="0000:00:00.0"', rule)
+        self.assertIn('ATTR{power/wakeup}="disabled"', rule)
+
+        action = (ROOT / 'packaging/device-support/tree/etc/tb378fc/power-key-action').read_text(encoding='utf-8')
+        self.assertEqual(action.strip(), 'suspend')
+
+        bsd = (ROOT / 'tools/build-sensors-deb.py').read_text(encoding='utf-8')
+        self.assertIn('SNS_CLIENT_DELIVERY_NO_WAKEUP', bsd)
+        self.assertIn('(msg_id == 513) ? 1 : 0', bsd)
+
 if __name__ == '__main__':
     unittest.main()

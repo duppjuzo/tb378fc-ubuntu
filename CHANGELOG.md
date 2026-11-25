@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.6.10 — 2026-11-26
+
+### `s2idle` 休眠修复与短按电源键自动休眠（`tb378fc-device-support 0.6.10` + `tb378fc-sensors 0.2.5`）
+- **修复 `tb378fc-power-key.py` 锁屏 D-Bus 阻塞与连按竞争**：将阻塞式 `org.gnome.ScreenSaver.Lock` 改为非阻塞 `loginctl lock-session`（3s 超时）+ 2.5s 轮询 `GetActive`/`LockedHint`（1s 后 `SetActive true` 兜底），超时仍强制熄屏并记录日志；新增按后排空缓冲输入与 0.6s 连按防抖，消除 `8s Lock timed out` 与快速切换导致的 `nt36536 -112` 告警。
+- **修复 `console-setup` systemd 单元转义告警**：将 `90-tb378fc-sanitize-xkb.conf` 中 `\1` 反向引用转义为 `\\1`。
+- **消除 PCIe `IRQ 218` 虚假秒醒并修复 DTS `wake-gpios` 极性**：将 `0009` 补丁及内核源码 `&pcieport0` 的 `wake-gpios` 由 `GPIO_ACTIVE_HIGH` 更正为 `GPIO_ACTIVE_LOW`；同时通过 udev 规则 `90-tb378fc-pcie-wakeup.rules` 在现网启动阶段禁用 `0000:00:00.0` `power/wakeup`。
+- **消除 `s2idle` 期间 ADSP 5 Hz 唤醒风暴（`tb378fc-sensors 0.2.5`）**：在 `sensh` 中将连续传感器配置流（`msg_id == 513`，加速度计/环境光）设为 `SNS_CLIENT_DELIVERY_NO_WAKEUP (1)`，仅保留 `watch`（`514`，磁吸霍尔开关）及查询类消息为 `WAKEUP (0)`。
+- **开启短按电源键自动进入 `s2idle`**：默认写入 `/etc/tb378fc/power-key-action` = `suspend`。
 ## 0.6.6 — 2026-11-24
 
 ### 联想原厂磁吸触点键盘与多指触控板内核支持（补丁 `0015`）
