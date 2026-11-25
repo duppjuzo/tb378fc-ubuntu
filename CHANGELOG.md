@@ -8,6 +8,7 @@
 - **消除 PCIe `IRQ 218` 虚假秒醒并修复 DTS `wake-gpios` 极性**：将 `0009` 补丁及内核源码 `&pcieport0` 的 `wake-gpios` 由 `GPIO_ACTIVE_HIGH` 更正为 `GPIO_ACTIVE_LOW`；同时通过 udev 规则 `90-tb378fc-pcie-wakeup.rules` 在现网启动阶段禁用 `0000:00:00.0` `power/wakeup`。
 - **消除 `s2idle` 期间 ADSP 5 Hz 唤醒风暴（`tb378fc-sensors 0.2.5`）**：在 `sensh` 中将连续传感器配置流（`msg_id == 513`，加速度计/环境光）设为 `SNS_CLIENT_DELIVERY_NO_WAKEUP (1)`，仅保留 `watch`（`514`，磁吸霍尔开关）及查询类消息为 `WAKEUP (0)`。
 - **开启短按电源键自动进入 `s2idle`**：默认写入 `/etc/tb378fc/power-key-action` = `suspend`。
+- **启用 SM8750 SoCCP 电源控制器并固化 PCIe `WAKE#` 极性（补丁 `0016`、`vendor_boot_b` 真机验证）**：在 `sm8750-lenovo-tb378fc.dts` 启用 `&smp2p_soccp` 与 `&remoteproc_soccp`（`qcom/sm8750/tb378fc/soccp.mbn`）并将 `&pcieport0` `wake-gpios` 移入独立补丁 `0016` 修正为 `GPIO_ACTIVE_LOW`（同步还原 `0009` 基线并更新固件安装脚本纳入 `soccp.mbn`）；经真机刷入 `vendor_boot_b` 重启验证，`remoteproc0` 已加载原厂 `soccp.mbn` 并进入 D3 释放引导阶段 NoC 投票（`in D3, boot bus vote dropped`），`s2idle`（插线状态）可稳定睡眠并由 RTC 干净唤醒（`fail: 0`），`cxsd`/`ddr` 塌陷仍待后续拔线及 `dwc3-qcom` HS-PHY / `qcom-pcie` L2 排查。
 ## 0.6.6 — 2026-11-24
 
 ### 联想原厂磁吸触点键盘与多指触控板内核支持（补丁 `0015`）

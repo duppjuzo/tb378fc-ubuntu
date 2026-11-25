@@ -22,7 +22,8 @@
       "kernel/patches/0012-arm64-dts-qcom-tb378fc-set-landscape-camera-rotation.patch",
       "kernel/patches/0013-arm64-dts-qcom-tb378fc-add-USB-C-DisplayPort0-audio-.patch",
       "kernel/patches/0014-platform-tb378fc-fix-schedutil-4.32-GHz-boost-nt3653.patch",
-      "kernel/patches/0015-Input-lenovo_pogo_keyboard-add-TB378FC-magnetic-pogo.patch"
+      "kernel/patches/0015-Input-lenovo_pogo_keyboard-add-TB378FC-magnetic-pogo.patch",
+      "kernel/patches/0016-arm64-dts-qcom-tb378fc-enable-SoCCP-and-fix-PCIe-WAK.patch"
     ],
     "upstream_config_fragments": [
       "arch/arm64/configs/sm8750-netfilter.config",

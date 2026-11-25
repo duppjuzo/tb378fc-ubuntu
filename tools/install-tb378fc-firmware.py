@@ -26,6 +26,7 @@ TARGETS = {
     "gen80000_aqe.fw": "qcom/gen80000_aqe.fw",
     "adsp.mdt": "qcom/sm8750/tb378fc/adsp.mdt",
     "adsp_dtb.mdt": "qcom/sm8750/tb378fc/adsp_dtb.mdt",
+    "soccp.mbn": "qcom/sm8750/tb378fc/soccp.mbn",
     "cdsp.mdt": "qcom/sm8750/tb378fc/cdsp.mdt",
     "cdsp_dtb.mdt": "qcom/sm8750/tb378fc/cdsp_dtb.mdt",
     "battmgr.jsn": "qcom/sm8750/tb378fc/battmgr.jsn",
@@ -293,6 +294,7 @@ def main() -> int:
         "qcom/sm8750/tb378fc/gen80000_zap.mbn",
         "qcom/sm8750/tb378fc/adsp.mdt",
         "qcom/sm8750/tb378fc/adsp_dtb.mdt",
+        "qcom/sm8750/tb378fc/soccp.mbn",
         "novatek/tb378fc.bin",
         "awinic/tb378fc/aw88480-native-music.acf",
     ]

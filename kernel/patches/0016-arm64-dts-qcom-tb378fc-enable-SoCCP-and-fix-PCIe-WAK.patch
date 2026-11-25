@@ -1,0 +1,52 @@
+From b249163e5c68a2ab272655c433865177d077600a Mon Sep 17 00:00:00 2001
+From: TB378FC Maintainer <maintainer@tb378fc.local>
+Date: Thu, 26 Nov 2026 02:05:56 +0800
+Subject: [PATCH] arm64: dts: qcom: tb378fc: enable SoCCP and fix PCIe WAKE#
+ polarity
+
+Enable smp2p_soccp and remoteproc_soccp so Linux boots qcom/sm8750/tb378fc/soccp.mbn
+
+and lets the SoCCP park in D3 instead of retaining system NoC/CX/DDR votes across
+
+s2idle. Also fix pcieport0 wake-gpios from GPIO_ACTIVE_HIGH to GPIO_ACTIVE_LOW to
+
+match gpio104 pull-up polarity and sm8750-erhai.dts.
+
+Signed-off-by: TB378FC Maintainer <maintainer@tb378fc.local>
+---
+ arch/arm64/boot/dts/qcom/sm8750-lenovo-tb378fc.dts | 12 +++++++++++-
+ 1 file changed, 11 insertions(+), 1 deletion(-)
+
+diff --git a/arch/arm64/boot/dts/qcom/sm8750-lenovo-tb378fc.dts b/arch/arm64/boot/dts/qcom/sm8750-lenovo-tb378fc.dts
+index 59f67817875..589046c673d 100644
+--- a/arch/arm64/boot/dts/qcom/sm8750-lenovo-tb378fc.dts
++++ b/arch/arm64/boot/dts/qcom/sm8750-lenovo-tb378fc.dts
+@@ -1445,7 +1445,7 @@ &pcie0_phy {
+ };
+ 
+ &pcieport0 {
+-	wake-gpios = <&tlmm 104 GPIO_ACTIVE_HIGH>;
++	wake-gpios = <&tlmm 104 GPIO_ACTIVE_LOW>;
+ 	reset-gpios = <&tlmm 102 GPIO_ACTIVE_LOW>;
+ 
+ 	wifi@0 {
+@@ -1616,6 +1616,16 @@ &iris {
+ 	status = "okay";
+ };
+ 
++/* SoCCP power controller (boot early so bootloader image parks in D3 for s2idle CX/DDR collapse) */
++&smp2p_soccp {
++	status = "okay";
++};
++
++&remoteproc_soccp {
++	firmware-name = "qcom/sm8750/tb378fc/soccp.mbn";
++	status = "okay";
++};
++
+ /* ADSP & SoundWire WCD9390 */
+ &remoteproc_adsp {
+ 	reg = <0x0 0x03000000 0x0 0x10000>;
+-- 
+2.43.0
+
