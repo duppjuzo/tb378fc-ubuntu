@@ -68,7 +68,7 @@ KERNEL_SOURCE=~/tb378fc-linux OUT_DIR=~/tb378fc-out/kernel JOBS="$(nproc)" ./too
 | `0006` | `qcom_battmgr` 联想 TB378FC 适配（电流符号、有界 0..900mA USB ICL 写入、只读 `0x60` 充电诊断与 DT Schema） |
 | `0007` | GC08A8 前摄驱动、OV13B10 联想 VAF/上电时序与 OF 匹配、**DW9807（GT9772B）VCM 自动对焦**与 DT Schema、CAMSS Gen4 256B `sizeimage` 对齐、**Iris VPU35 AV1(3×)/10-bit(2×) 时钟缩放** |
 | `0008` | `qcom_geni_serial` 无 `serial*` 别名时钳制负索引，保障蓝牙 UART14 探测 |
-| `0009` | 统一版 `sm8750-lenovo-tb378fc.dts` + `sm8750-lenovo-tb378fc-camera.dtsi`（含 118°C CPU 降频、8GB 安全 `ramoops@c2000000`、独立 CSI-2 PHY 相机图 + `lens@c` VCM、ABL 根身份恢复） |
+| `0009` | 统一版 `sm8750-lenovo-tb378fc.dts` + `sm8750-lenovo-tb378fc-camera.dtsi`（含 118°C CPU 降频、8GB/12GB 通用安全 `ramoops@c2000000`、独立 CSI-2 PHY 相机图 + `lens@c` VCM、ABL 根身份恢复） |
 | `0010` | SM8750 TSENS `no_irq_wake`（防降温阈值唤醒 `s2idle`）、UCSI `system_freezable_wq`、WCN7860 蓝牙 `gngbt*` → `brhbt*` 自动固件回退 |
 
 ---

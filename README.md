@@ -1,6 +1,6 @@
 # Ubuntu for Lenovo Xiaoxin Pad Pro GT 13 (TB378FC)
 
-在联想小新 Pad Pro GT 13（**TB378FC / `zhiyu` / Snapdragon 8 Elite / SM8750P**，8GB+256GB）上运行 **Ubuntu Desktop 26.04 LTS (`resolute`)**，提供**跨平台一键刷机向导**与 **ZUXOS ↔ Ubuntu 同活动槽位一键双系统互切**。
+在联想小新 Pad Pro GT 13（**TB378FC / `zhiyu` / Snapdragon 8 Elite / SM8750P**，8GB/12GB+256GB（验证机 12GB+256GB））上运行 **Ubuntu Desktop 26.04 LTS (`resolute`)**，提供**跨平台一键刷机向导**与 **ZUXOS ↔ Ubuntu 同活动槽位一键双系统互切**。
 
 本项目基于统一主线 **Linux 7.4-rc2 (`sm8750/v7.4-dev`)**、15 个 TB378FC 原子补丁（`0001..0015`）、Mesa 26.2.6 (Freedreno / Turnip)、Qualcomm Iris VPU35 VA-API、补丁版 `libcamera 0.7.2` 与 `tb378fc-sensors` 传感器栈构建；同步上游 [OnePlus Pad 2 Pro mainline](https://github.com/yzddmr6/onepluspad-2pro-mainline) 与 [linux-sm8750-erhai](https://github.com/yzddmr6/linux-sm8750-erhai) 的 SM8750P 公共成果及 [linux-zhiyu](https://github.com/PickaxeHit/linux-zhiyu) 的休眠/对焦修复，同时**严格隔离所有一加/小米板级驱动**。完整来源见 [NOTICE](NOTICE.md)。
 

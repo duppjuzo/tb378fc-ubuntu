@@ -1,6 +1,6 @@
 # 一键刷机、同槽双系统与紧急恢复指南（TB378FC）
 
-本文面向已解锁 Bootloader 的 **联想小新 Pad Pro GT 13（TB378FC，8GB+256GB，SM8750P）**。
+本文面向已解锁 Bootloader 的 **联想小新 Pad Pro GT 13（TB378FC，8GB/12GB+256GB，SM8750P）**。
 
 ## 关键安全红线（必读）
 

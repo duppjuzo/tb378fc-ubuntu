@@ -1,6 +1,6 @@
 # 硬件支持状态（v0.6.6 / Linux 7.4 统一架构）
 
-目标设备：**联想小新 Pad Pro GT 13（TB378FC / `zhiyu` / Qualcomm SM8750P / 8GB + 256GB / 已解锁 Bootloader）**。
+目标设备：**联想小新 Pad Pro GT 13（TB378FC / `zhiyu` / Qualcomm SM8750P / 8GB/12GB + 256GB（主力验证机 12GB + 256GB） / 已解锁 Bootloader）**。
 
 ## 硬件模块与真机验证状态
 
@@ -19,7 +19,7 @@
 | 后置闪光灯 / 手电筒 | `leds-qcom-flash` (`pm8550_flash`) + `tb378fc-torch` | **正常**：动态 `seat0` / `video` 组鉴权控制正常 |
 | 传感器与磁吸皮套 | `tb378fc-sensors 0.2.3` (`hexagonrpcd` + `sensh` + `tb378fc-sensord`) | **正常**：四向重力自动旋转、磁吸皮套霍尔合盖 `s2idle` 休眠/开盖唤醒、真实物理 `lux` 上报 + GNOME Shell 原生绝对照度 LUT 自适应背光（抗眩光防抖、关灯 `0 lux` 丝滑降到底、四向旋转零漂移） |
 | Wi-Fi 7 & 蓝牙 | WCN7860 (`ath12k` + `btqca` `0010`/`0014` + AOSP BQR + WirePlumber AAC/LDAC) | **正常**：Wi-Fi 7 高速连接、蓝牙高清音频与蓝牙键鼠/触屏键盘共存正常 |
-| 内部存储与内存管理 | UFS 4.0 MCQ + UFS HWMON + MGLRU + zram (`tb378fc-zram`) | **正常**：8GB 专用安全保留内存布局（`ramoops@c2000000`），低写放大 journald/I/O 调度 |
+| 内部存储与内存管理 | UFS 4.0 MCQ + UFS HWMON + MGLRU + zram (`tb378fc-zram`) | **正常**：8GB/12GB 通用安全保留内存布局（`ramoops@c2000000`），低写放大 journald/I/O 调度 |
 | 电池、充电、睿频与温控 | `qcom_battmgr` (`0006`/`0014`) + `schedutil` **4.32 GHz** Prime 睿频 (`0014`) + Oryon 118°C 被动降频 + 三档温控 | **正常**：充放电功率/电量显示正常，实机达成 4.32 GHz 单核睿频，支持省电/平衡/性能三档温控与持久化 |
 | 同槽双系统互切 | `switch/tb378fc-switch` (`_a` / `_b` 自适应) + KernelSU 模块 | **正常**：ZUXOS (`2.0.10.320` 等) ↔ Ubuntu 26.04 双向一键切换稳定可靠 |
 
