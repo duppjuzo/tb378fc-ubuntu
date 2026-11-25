@@ -1,0 +1,58 @@
+From 24c467bd51c66ea4be5662c2b783d53d132b9dc7 Mon Sep 17 00:00:00 2001
+From: TB378FC Maintainer <maintainer@tb378fc.local>
+Date: Thu, 26 Nov 2026 03:03:47 +0800
+Subject: [PATCH] arm64: dts: qcom: tb378fc: disable unused crypto and WSA
+ LPASS macros
+
+TZ-owned crypto@1dfa000 has no Linux driver on SM8750; leaving it enabled
+
+prevents state_synced completion on mc_virt (interconnect-1) and aggre2_noc
+
+(1700000.interconnect), pinning INT_MAX boot proxy votes on MC0, ACV, and
+
+CE0 and blocking s2idle CX collapse and DDR self-refresh.
+
+Also disable unused &lpass_wsamacro and &lpass_wsa2macro since TB378FC uses
+
+I2C AW88480 speaker amplifiers on TDM rather than WSA SoundWire paths.
+
+Signed-off-by: TB378FC Maintainer <maintainer@tb378fc.local>
+---
+ arch/arm64/boot/dts/qcom/sm8750-lenovo-tb378fc.dts | 14 ++++++++++++++
+ 1 file changed, 14 insertions(+)
+
+diff --git a/arch/arm64/boot/dts/qcom/sm8750-lenovo-tb378fc.dts b/arch/arm64/boot/dts/qcom/sm8750-lenovo-tb378fc.dts
+index 589046c673d..dcf6449abf7 100644
+--- a/arch/arm64/boot/dts/qcom/sm8750-lenovo-tb378fc.dts
++++ b/arch/arm64/boot/dts/qcom/sm8750-lenovo-tb378fc.dts
+@@ -1285,6 +1285,11 @@ &ufs_mem_hc {
+ };
+ 
+ /* QUPv3 wrappers and DMA */
++/* TZ-owned QCE has no Linux driver; disable so interconnect sync_state completes. */
++&crypto {
++	status = "disabled";
++};
++
+ &qupv3_1 {
+ 	status = "okay";
+ 
+@@ -1644,6 +1649,15 @@ &lpass_vamacro {
+ 	qcom,dmic-sample-rate = <4800000>;
+ };
+ 
++/* External speakers use I2C AW88480 amps on TDM, not WSA SoundWire macros. */
++&lpass_wsamacro {
++	status = "disabled";
++};
++
++&lpass_wsa2macro {
++	status = "disabled";
++};
++
+ &swr1 {
+ 	status = "okay";
+ 
+-- 
+2.43.0
+

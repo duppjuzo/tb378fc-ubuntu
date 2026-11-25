@@ -9,6 +9,7 @@
 - **消除 `s2idle` 期间 ADSP 5 Hz 唤醒风暴（`tb378fc-sensors 0.2.5`）**：在 `sensh` 中将连续传感器配置流（`msg_id == 513`，加速度计/环境光）设为 `SNS_CLIENT_DELIVERY_NO_WAKEUP (1)`，仅保留 `watch`（`514`，磁吸霍尔开关）及查询类消息为 `WAKEUP (0)`。
 - **开启短按电源键自动进入 `s2idle`**：默认写入 `/etc/tb378fc/power-key-action` = `suspend`。
 - **启用 SM8750 SoCCP 电源控制器并固化 PCIe `WAKE#` 极性（补丁 `0016`、`vendor_boot_b` 真机验证）**：在 `sm8750-lenovo-tb378fc.dts` 启用 `&smp2p_soccp` 与 `&remoteproc_soccp`（`qcom/sm8750/tb378fc/soccp.mbn`）并将 `&pcieport0` `wake-gpios` 移入独立补丁 `0016` 修正为 `GPIO_ACTIVE_LOW`（同步还原 `0009` 基线并更新固件安装脚本纳入 `soccp.mbn`）；经真机刷入 `vendor_boot_b` 重启验证，`remoteproc0` 已加载原厂 `soccp.mbn` 并进入 D3 释放引导阶段 NoC 投票（`in D3, boot bus vote dropped`），`s2idle`（插线状态）可稳定睡眠并由 RTC 干净唤醒（`fail: 0`），`cxsd`/`ddr` 塌陷仍待后续拔线及 `dwc3-qcom` HS-PHY / `qcom-pcie` L2 排查。
+- **禁用未用 TZ-owned `&crypto` 与 `&lpass_wsa*` 节点并真机打通 `cxsd`/`ddr` 深度塌陷（补丁 `0017`、`vendor_boot_b` 真机验证）**：经真机全量排查确认 `1dfa000.crypto`（TZ 接管、内核无驱动）阻塞 `interconnect-1`（`mc_virt`：`MC0`/`ACV`）与 `1700000.interconnect`（`aggre2_noc`：`CE0`/`SN0`）完成 `sync_state()`，导致 DDR 频率锁死在 3187 MHz 无法降频与自刷新；新增补丁 `0017` 在 `sm8750-lenovo-tb378fc.dts` 禁用 `&crypto` 以及未使用的 `&lpass_wsamacro`/`&lpass_wsa2macro`（TB378FC 扬声器使用 I2C `AW88480` 走 TDM）。刷入更新后 `vendor_boot_b` 重启实测全系统 `state_synced == 0` 设备已清零；插着 USB 执行 25 秒 `rtcwake -m mem -s 25`：`qcom_stats/cxsd` `0 -> 53`（+24.36 秒 / ~97.4%）、`qcom_stats/ddr` `0 -> 53`（+24.39 秒 / ~97.6%）、`ddr_stats` `0xd4`（DDR 自刷新）`0 -> 53`（+24.40 秒），`suspend_stats` `success=1, fail=0`（`pm_wakeup_irq=21` RTC 唤醒）。
 ## 0.6.6 — 2026-11-24
 
 ### 联想原厂磁吸触点键盘与多指触控板内核支持（补丁 `0015`）
