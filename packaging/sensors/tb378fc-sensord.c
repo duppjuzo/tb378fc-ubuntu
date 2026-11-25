@@ -26,9 +26,11 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
-#define BUS_NAME "net.hadess.SensorProxy"
-#define OBJ_PATH "/net/hadess/SensorProxy"
-#define IFACE    "net.hadess.SensorProxy"
+#define BUS_NAME         "net.hadess.SensorProxy"
+#define OBJ_PATH         "/net/hadess/SensorProxy"
+#define IFACE            "net.hadess.SensorProxy"
+#define COMPASS_OBJ_PATH "/net/hadess/SensorProxy/Compass"
+#define COMPASS_IFACE    "net.hadess.SensorProxy.Compass"
 #ifndef SENSH
 #define SENSH    "/usr/bin/sensh"
 #endif
@@ -53,6 +55,16 @@ static const gchar introspection_xml[] =
 	"  </interface>"
 	"</node>";
 
+static const gchar compass_introspection_xml[] =
+	"<node>"
+	"  <interface name='net.hadess.SensorProxy.Compass'>"
+	"    <method name='ClaimCompass'/>"
+	"    <method name='ReleaseCompass'/>"
+	"    <property name='HasCompass' type='b' access='read'/>"
+	"    <property name='CompassHeading' type='d' access='read'/>"
+	"  </interface>"
+	"</node>";
+
 typedef enum {
 	STREAM_LIGHT,
 	STREAM_ACCEL,
@@ -73,6 +85,7 @@ struct Sensord {
 	GDBusConnection *conn;
 	guint owner_id;
 	guint reg_id;
+	guint compass_reg_id;
 
 	gboolean has_light;
 	gboolean light_valid;
@@ -689,6 +702,8 @@ static void method_call(GDBusConnection *connection, const gchar *sender,
 	if (g_strcmp0(interface_name, IFACE) == 0) {
 		if (g_strcmp0(method_name, "ClaimAccelerometer") == 0) {
 			self->accel_claimed = TRUE;
+			g_message("ClaimAccelerometer (%s, orientation=%s)",
+				  sender ?: "unknown", self->orientation ?: "normal");
 			if (self->orientation) {
 				set_spk_rotation(self->orientation);
 				emit_property(self, "AccelerometerOrientation",
@@ -696,6 +711,7 @@ static void method_call(GDBusConnection *connection, const gchar *sender,
 			}
 		} else if (g_strcmp0(method_name, "ReleaseAccelerometer") == 0) {
 			self->accel_claimed = FALSE;
+			g_message("ReleaseAccelerometer (%s)", sender ?: "unknown");
 		} else if (g_strcmp0(method_name, "ClaimLight") == 0) {
 			self->light_claimed = TRUE;
 			if (self->has_light && self->light_valid)
@@ -712,6 +728,55 @@ static void method_call(GDBusConnection *connection, const gchar *sender,
 static const GDBusInterfaceVTable vtable = {
 	.method_call = method_call,
 	.get_property = get_property,
+	.set_property = NULL,
+};
+
+static GVariant *compass_get_property(GDBusConnection *connection,
+				      const gchar *sender,
+				      const gchar *object_path,
+				      const gchar *interface_name,
+				      const gchar *property_name,
+				      GError **error, gpointer user_data)
+{
+	(void)connection;
+	(void)sender;
+	(void)object_path;
+	(void)interface_name;
+	(void)user_data;
+
+	if (g_strcmp0(property_name, "HasCompass") == 0)
+		return g_variant_new_boolean(FALSE);
+	if (g_strcmp0(property_name, "CompassHeading") == 0)
+		return g_variant_new_double(-1.0);
+
+	g_set_error(error, G_IO_ERROR, G_IO_ERROR_NOT_SUPPORTED,
+		    "Unknown property %s", property_name);
+	return NULL;
+}
+
+static void compass_method_call(GDBusConnection *connection,
+				const gchar *sender,
+				const gchar *object_path,
+				const gchar *interface_name,
+				const gchar *method_name,
+				GVariant *parameters,
+				GDBusMethodInvocation *invocation,
+				gpointer user_data)
+{
+	(void)connection;
+	(void)sender;
+	(void)object_path;
+	(void)interface_name;
+	(void)method_name;
+	(void)parameters;
+	(void)user_data;
+
+	g_dbus_method_invocation_return_value(invocation, NULL);
+}
+
+static const GDBusInterfaceVTable compass_vtable = {
+	.method_call = compass_method_call,
+	.get_property = compass_get_property,
 	.set_property = NULL,
 };
 
@@ -736,6 +801,21 @@ static void on_bus_acquired(GDBusConnection *connection, const gchar *name,
 	g_dbus_node_info_unref(info);
 	if (!self->reg_id) {
 		g_warning("register object: %s", error->message);
+		g_error_free(error);
+	}
+
+	info = g_dbus_node_info_new_for_xml(compass_introspection_xml, &error);
+	if (!info) {
+		g_warning("compass introspection: %s", error->message);
+		g_error_free(error);
+		return;
+	}
+	self->compass_reg_id = g_dbus_connection_register_object(
+		connection, COMPASS_OBJ_PATH, info->interfaces[0],
+		&compass_vtable, self, NULL, &error);
+	g_dbus_node_info_unref(info);
+	if (!self->compass_reg_id) {
+		g_warning("register compass object: %s", error->message);
 		g_error_free(error);
 	}
 }
