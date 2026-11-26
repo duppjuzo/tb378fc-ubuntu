@@ -1,0 +1,52 @@
+freedreno/a6xx: synchronize GMEM blit writes to UCHE for A7XX+ framebuffer fetch
+
+On Adreno A7XX/A8XX, GMEM clears (BLIT_EVENT_CLEAR) and GMEM restores
+(BLIT_EVENT_LOAD) emit CP_EVENT_WRITE::BLIT (FD_CCU_RESOLVE), whose writes
+reside in the CCU blit cache and are not automatically visible to TP/UCHE
+texture reads (isamm) used by GL_EXT_shader_framebuffer_fetch without a
+blit cache clean + WFI before the subpass draws.
+
+- In prepare_tile_setup(), when CHIP >= A7XX && (batch->gmem_reason & FD_GMEM_FB_READ),
+  emit FD_CCU_CLEAN_BLIT_CACHE + CP_WAIT_FOR_IDLE at the end of tile_loads and
+  subpass_clears.
+- In fd6_texture_barrier(), include FD6_BLIT_CLEAN_CACHE in
+  PIPE_TEXTURE_BARRIER_FRAMEBUFFER flushes.
+
+Signed-off-by: TB378FC Maintainer <maintainer@tb378fc.local>
+---
+--- a/src/gallium/drivers/freedreno/a6xx/fd6_barrier.cc
++++ b/src/gallium/drivers/freedreno/a6xx/fd6_barrier.cc
+@@ -115,7 +115,8 @@
+    if (flags & PIPE_TEXTURE_BARRIER_FRAMEBUFFER) {
+       flushes |= FD6_WAIT_FOR_IDLE | FD6_WAIT_FOR_ME |
+             FD6_FLUSH_CCU_COLOR | FD6_FLUSH_CCU_DEPTH |
+-            FD6_FLUSH_CACHE | FD6_INVALIDATE_CACHE;
++            FD6_FLUSH_CACHE | FD6_INVALIDATE_CACHE |
++            FD6_BLIT_CLEAN_CACHE;
+    }
+ 
+    add_flushes(pctx, flushes);
+--- a/src/gallium/drivers/freedreno/a6xx/fd6_gmem.cc
++++ b/src/gallium/drivers/freedreno/a6xx/fd6_gmem.cc
+@@ -1749,6 +1749,10 @@
+ 
+       set_blit_scissor(batch, cs);
+       emit_restore_blits<CHIP>(batch, cs);
++      if (CHIP >= A7XX && (batch->gmem_reason & FD_GMEM_FB_READ)) {
++         fd6_event_write<CHIP>(batch->ctx, cs, FD_CCU_CLEAN_BLIT_CACHE);
++         fd_pkt7(cs, CP_WAIT_FOR_IDLE, 0);
++      }
+    }
+ 
+    foreach_subpass (subpass, batch) {
+@@ -1762,6 +1766,10 @@
+ 
+       set_blit_scissor(batch, cs);
+       emit_subpass_clears<CHIP>(batch, cs, subpass);
++      if (CHIP >= A7XX && (batch->gmem_reason & FD_GMEM_FB_READ)) {
++         fd6_event_write<CHIP>(batch->ctx, cs, FD_CCU_CLEAN_BLIT_CACHE);
++         fd_pkt7(cs, CP_WAIT_FOR_IDLE, 0);
++      }
+    }
+ }
+ 

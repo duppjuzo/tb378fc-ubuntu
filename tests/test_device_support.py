@@ -686,22 +686,20 @@ class TestPowerKeyAndUnitHygiene(unittest.TestCase):
         self.assertIn('SNS_CLIENT_DELIVERY_NO_WAKEUP', bsd)
         self.assertIn('(msg_id == 513) ? 1 : 0', bsd)
 
-    def test_a830_drirc_disables_broken_fbfetch(self) -> None:
-        import xml.etree.ElementTree as ET
+    def test_a830_fbfetch_fixed_in_mesa_not_drirc(self) -> None:
+        import hashlib
 
         drirc = ROOT / 'packaging/device-support/tree/usr/lib/tb378fc/mesa/share/drirc.d/10-tb378fc-a830.conf'
-        self.assertTrue(drirc.exists(), f'missing drirc drop-in: {drirc}')
-        root = ET.parse(drirc).getroot()
-        self.assertEqual(root.tag, 'driconf')
-        device = root.find("./device[@driver='msm']")
-        self.assertIsNotNone(device)
-        app = device.find("./application[@name='Default']")
-        self.assertIsNotNone(app)
-        opt = app.find("./option[@name='mesa_extension_override']")
-        self.assertIsNotNone(opt)
-        val = opt.attrib.get('value', '').split()
-        self.assertIn('-GL_EXT_shader_framebuffer_fetch', val)
-        self.assertIn('-GL_EXT_shader_framebuffer_fetch_non_coherent', val)
+        self.assertFalse(drirc.exists(), f'temporary drirc workaround should be removed: {drirc}')
+        lock = json.loads((ROOT / 'packaging/mesa/source.json').read_text(encoding='utf-8'))
+        matches = [
+            p for p in lock.get('additional_patches', [])
+            if p.get('path') == 'patches/freedreno-a7xx-fbfetch-blit-sync.patch'
+        ]
+        self.assertEqual(len(matches), 1)
+        patch_file = ROOT / 'packaging/mesa' / matches[0]['path']
+        self.assertTrue(patch_file.is_file(), f'missing Mesa patch: {patch_file}')
+        self.assertEqual(hashlib.sha256(patch_file.read_bytes()).hexdigest(), matches[0]['sha256'])
 
 if __name__ == '__main__':
     unittest.main()

@@ -15,7 +15,7 @@ import tarfile
 REPO = Path(__file__).resolve().parents[1]
 MESA_DIR = REPO / "packaging" / "mesa"
 DEFAULT_PREFIX = "/usr/lib/tb378fc/mesa"
-DEFAULT_DEB_REV = "0.2.0"
+DEFAULT_DEB_REV = "0.2.1"
 
 
 def sha256(path: Path) -> str:

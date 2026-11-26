@@ -80,6 +80,13 @@
       "upstream_commit": "5a9db0be64e090164930593c6cd13d08ad45123f",
       "origin": "https://gitlab.freedesktop.org/mesa/mesa/-/commit/5a9db0be64e090164930593c6cd13d08ad45123f",
       "license": "MIT"
+    },
+    {
+      "path": "patches/freedreno-a7xx-fbfetch-blit-sync.patch",
+      "sha256": "2bab3c09ba7f2ace8852f57841ef5fd17eb6ac3413af9c8cc5bd28dd3408f650",
+      "upstream": "local, not yet submitted",
+      "exit_condition": "Remove once upstream Mesa synchronizes A7XX+ GMEM blits/clears to UCHE before FD_GMEM_FB_READ subpass draws.",
+      "license": "MIT"
     }
   ],
   "archive_url": "https://archive.mesa3d.org/mesa-26.2.6.tar.xz",
