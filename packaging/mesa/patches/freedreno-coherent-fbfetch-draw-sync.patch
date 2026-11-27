@@ -1,0 +1,57 @@
+From: TB378FC Porting Team <porting@tb378fc.local>
+Subject: [PATCH] freedreno/a6xx: synchronize non-coherent draws before coherent fbfetch
+
+Regular 3D draws emit GRAS_SC_CNTL.SINGLE_PRIM_MODE = NO_FLUSH, whereas
+coherent GL_EXT_shader_framebuffer_fetch draws emit FLUSH_PER_OVERLAP
+(GMEM) or FLUSH_PER_OVERLAP_AND_OVERWRITE (SYSMEM). On Adreno 830 (a8xx),
+FLUSH_PER_OVERLAP(_AND_OVERWRITE) only orders against prior primitives in
+that mode and does not wait for or flush preceding NO_FLUSH draws still
+in SP/RB or CCU, causing coherent fbfetch draws (e.g. Skia GaneshGL LCD
+subpixel glyph quads over gradient buttons) to read stale pre-draw color.
+
+Track whether non-coherent-fbfetch draws have been emitted in fd_batch
+and emit FD6_FLUSH_CCU_COLOR | FD6_INVALIDATE_CACHE | FD6_WAIT_FOR_IDLE
+when transitioning to a coherent fbfetch draw.
+
+License: MIT
+---
+diff --git a/src/gallium/drivers/freedreno/freedreno_batch.h b/src/gallium/drivers/freedreno/freedreno_batch.h
+--- a/src/gallium/drivers/freedreno/freedreno_batch.h
++++ b/src/gallium/drivers/freedreno/freedreno_batch.h
+@@ -120,6 +120,11 @@
+     */
+    bool needs_wfi : 1;
+ 
++   /* Set when a draw that does not use coherent fbfetch (SINGLE_PRIM_MODE == NO_FLUSH)
++    * has been emitted in this batch; cleared once flushed before a coherent fbfetch draw.
++    */
++   bool has_non_coherent_fbfetch_draws : 1;
++
+    /* To decide whether to render to system memory, keep track of the
+     * number of draws, and whether any of them require multisample,
+     * depth_test (or depth write), stencil_test, blending, and
+diff --git a/src/gallium/drivers/freedreno/a6xx/fd6_draw.cc b/src/gallium/drivers/freedreno/a6xx/fd6_draw.cc
+--- a/src/gallium/drivers/freedreno/a6xx/fd6_draw.cc
++++ b/src/gallium/drivers/freedreno/a6xx/fd6_draw.cc
+@@ -488,6 +488,21 @@
+        DRAW == DRAW_INDIRECT_OP_INDIRECT_COUNT)
+       ctx->batch->barrier |= FD6_WAIT_FOR_ME;
+ 
++   const bool coherent_fbfetch =
++      emit.fs->fs.uses_fbfetch_output &&
++      ((ctx->blend && ctx->blend->blend_coherent) ||
++       emit.fs->fs.fbfetch_coherent);
++   if (coherent_fbfetch) {
++      if (ctx->batch->has_non_coherent_fbfetch_draws) {
++         ctx->batch->barrier |= FD6_FLUSH_CCU_COLOR |
++                                FD6_INVALIDATE_CACHE |
++                                FD6_WAIT_FOR_IDLE;
++         ctx->batch->has_non_coherent_fbfetch_draws = false;
++      }
++   } else {
++      ctx->batch->has_non_coherent_fbfetch_draws = true;
++   }
++
+    fd6_barrier_flush<CHIP>(cs, ctx->batch);
+ 
+    if (is_indirect(DRAW)) {

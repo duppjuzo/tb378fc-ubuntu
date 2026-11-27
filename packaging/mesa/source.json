@@ -87,6 +87,13 @@
       "upstream": "local, not yet submitted",
       "exit_condition": "Remove once upstream Mesa synchronizes A7XX+ GMEM blits/clears to UCHE before FD_GMEM_FB_READ subpass draws.",
       "license": "MIT"
+    },
+    {
+      "path": "patches/freedreno-coherent-fbfetch-draw-sync.patch",
+      "sha256": "9ae5dd9d8f43cf9ecb841f53bb7f8542e6472f4d961ad5d801d2cea6abfa6abf",
+      "upstream": "local, not yet submitted",
+      "exit_condition": "Remove once upstream Mesa synchronizes preceding NO_FLUSH draws before coherent fbfetch draws.",
+      "license": "MIT"
     }
   ],
   "archive_url": "https://archive.mesa3d.org/mesa-26.2.6.tar.xz",

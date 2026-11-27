@@ -692,14 +692,20 @@ class TestPowerKeyAndUnitHygiene(unittest.TestCase):
         drirc = ROOT / 'packaging/device-support/tree/usr/lib/tb378fc/mesa/share/drirc.d/10-tb378fc-a830.conf'
         self.assertFalse(drirc.exists(), f'temporary drirc workaround should be removed: {drirc}')
         lock = json.loads((ROOT / 'packaging/mesa/source.json').read_text(encoding='utf-8'))
-        matches = [
-            p for p in lock.get('additional_patches', [])
-            if p.get('path') == 'patches/freedreno-a7xx-fbfetch-blit-sync.patch'
-        ]
-        self.assertEqual(len(matches), 1)
-        patch_file = ROOT / 'packaging/mesa' / matches[0]['path']
-        self.assertTrue(patch_file.is_file(), f'missing Mesa patch: {patch_file}')
-        self.assertEqual(hashlib.sha256(patch_file.read_bytes()).hexdigest(), matches[0]['sha256'])
+        for expected_patch in (
+            'patches/freedreno-a7xx-fbfetch-blit-sync.patch',
+            'patches/freedreno-coherent-fbfetch-draw-sync.patch',
+        ):
+            matches = [
+                p for p in lock.get('additional_patches', [])
+                if p.get('path') == expected_patch
+            ]
+            self.assertEqual(len(matches), 1, f'expected {expected_patch} in source.json')
+            patch_file = ROOT / 'packaging/mesa' / matches[0]['path']
+            self.assertTrue(patch_file.is_file(), f'missing Mesa patch: {patch_file}')
+            self.assertEqual(hashlib.sha256(patch_file.read_bytes()).hexdigest(), matches[0]['sha256'])
+        bmd = (ROOT / 'tools/build-mesa-deb.py').read_text(encoding='utf-8')
+        self.assertIn('DEFAULT_DEB_REV = "0.2.2"', bmd)
 
     def test_apparmor_gpu_abstractions_and_postinst_reload(self) -> None:
         aa_base = ROOT / 'packaging/device-support/tree/etc/apparmor.d/abstractions'
