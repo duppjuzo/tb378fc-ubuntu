@@ -701,5 +701,23 @@ class TestPowerKeyAndUnitHygiene(unittest.TestCase):
         self.assertTrue(patch_file.is_file(), f'missing Mesa patch: {patch_file}')
         self.assertEqual(hashlib.sha256(patch_file.read_bytes()).hexdigest(), matches[0]['sha256'])
 
+    def test_apparmor_gpu_abstractions_and_postinst_reload(self) -> None:
+        aa_base = ROOT / 'packaging/device-support/tree/etc/apparmor.d/abstractions'
+        dri_enum = aa_base / 'dri-enumerate.d/tb378fc'
+        dri_common = aa_base / 'dri-common.d/tb378fc'
+        vulkan = aa_base / 'vulkan.d/tb378fc'
+        for p in (dri_enum, dri_common, vulkan):
+            self.assertTrue(p.is_file(), f'missing AppArmor drop-in: {p}')
+
+        self.assertIn('@{sys}/devices/platform/soc@0/** r,', dri_enum.read_text(encoding='utf-8'))
+        for p in (dri_common, vulkan):
+            txt = p.read_text(encoding='utf-8')
+            self.assertIn('/usr/lib/tb378fc/mesa/lib/** mr,', txt)
+            self.assertIn('/usr/lib/tb378fc/mesa/share/** r,', txt)
+
+        build_debs = (ROOT / 'tools/build-debs.py').read_text(encoding='utf-8')
+        self.assertIn('systemctl reload apparmor.service', build_debs)
+        self.assertIn('apparmor_parser -r', build_debs)
+
 if __name__ == '__main__':
     unittest.main()

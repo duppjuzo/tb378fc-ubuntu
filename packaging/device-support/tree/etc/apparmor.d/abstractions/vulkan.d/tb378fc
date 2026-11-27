@@ -1,0 +1,3 @@
+# Lenovo TB378FC custom Mesa Turnip Vulkan ICD and libraries
+/usr/lib/tb378fc/mesa/lib/** mr,
+/usr/lib/tb378fc/mesa/share/** r,

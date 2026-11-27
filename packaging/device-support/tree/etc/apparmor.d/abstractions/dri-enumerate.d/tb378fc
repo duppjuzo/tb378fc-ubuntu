@@ -1,0 +1,2 @@
+# Lenovo TB378FC (SM8750P / Adreno 830) platform display & GPU sysfs enumeration
+@{sys}/devices/platform/soc@0/** r,
