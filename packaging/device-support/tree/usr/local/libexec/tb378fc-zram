@@ -1,11 +1,20 @@
 #!/bin/sh
 # SPDX-License-Identifier: GPL-2.0-only
-# 1:1 RAM-sized compressed swap on /dev/zram0 (lz4 hot primary + zstd secondary multi-comp when available).
+# 1:1 RAM-sized compressed swap on /dev/zram0 (lz4 hot primary + zstd secondary multi-comp + optional idle writeback).
 set -eu
 
 [ -e /sys/block/zram0/disksize ] || modprobe zram num_devices=1 2>/dev/null || exit 0
 [ -e /sys/block/zram0/disksize ] || exit 0
 [ "$(cat /sys/block/zram0/disksize)" = "0" ] || exit 0
+
+ZRAM_WRITEBACK=1
+ZRAM_BACKING_FILE=/var/lib/tb378fc/zram-backing.img
+ZRAM_BACKING_MAX_MIB=8192
+ZRAM_MIN_FREE_MIB=4096
+if [ -r /etc/default/tb378fc-zram ]; then
+    # shellcheck source=/dev/null
+    . /etc/default/tb378fc-zram
+fi
 
 mem_kb=$(awk '/^MemTotal:/ { print $2; exit }' /proc/meminfo)
 if [ -z "${mem_kb:-}" ] || [ "$mem_kb" -le 0 ]; then
@@ -13,7 +22,63 @@ if [ -z "${mem_kb:-}" ] || [ "$mem_kb" -le 0 ]; then
 fi
 disk_bytes=$(( (mem_kb / 4) * 4096 ))
 
-if [ -w /sys/block/zram0/recomp_algorithm ] &&    grep -qw lz4 /sys/block/zram0/comp_algorithm 2>/dev/null &&    grep -qw zstd /sys/block/zram0/comp_algorithm 2>/dev/null; then
+setup_backing_dev() {
+    [ "${ZRAM_WRITEBACK:-1}" = "1" ] || return 0
+    [ -w /sys/block/zram0/backing_dev ] || return 0
+    command -v losetup >/dev/null 2>&1 || return 0
+
+    backing_dir=$(dirname "$ZRAM_BACKING_FILE")
+    if [ ! -d "$backing_dir" ]; then
+        mkdir -p "$backing_dir" 2>/dev/null || return 0
+    fi
+    [ -w "$backing_dir" ] || return 0
+
+    max_bytes=$(( ZRAM_BACKING_MAX_MIB * 1024 * 1024 ))
+    if [ "$disk_bytes" -lt "$max_bytes" ]; then
+        backing_bytes=$disk_bytes
+    else
+        backing_bytes=$max_bytes
+    fi
+    backing_bytes=$(( (backing_bytes / 4194304) * 4194304 ))
+    [ "$backing_bytes" -ge 67108864 ] || return 0
+
+    if [ -f "$ZRAM_BACKING_FILE" ]; then
+        cur_size=$(stat -c %s "$ZRAM_BACKING_FILE" 2>/dev/null || echo 0)
+        if [ "${cur_size:-0}" -lt 67108864 ]; then
+            rm -f "$ZRAM_BACKING_FILE" 2>/dev/null || return 0
+        fi
+    fi
+
+    if [ ! -f "$ZRAM_BACKING_FILE" ]; then
+        avail_kb=$(df -Pk "$backing_dir" 2>/dev/null | awk 'NR==2 { print $4 }')
+        avail_bytes=$(( ${avail_kb:-0} * 1024 ))
+        min_free_bytes=$(( ZRAM_MIN_FREE_MIB * 1024 * 1024 ))
+        if [ "$avail_bytes" -lt $(( backing_bytes + min_free_bytes )) ]; then
+            return 0
+        fi
+        if command -v fallocate >/dev/null 2>&1; then
+            fallocate -l "$backing_bytes" "$ZRAM_BACKING_FILE" 2>/dev/null || rm -f "$ZRAM_BACKING_FILE"
+        fi
+        [ -f "$ZRAM_BACKING_FILE" ] || return 0
+        chmod 0600 "$ZRAM_BACKING_FILE" 2>/dev/null || true
+    fi
+
+    modprobe loop 2>/dev/null || true
+    loop_dev=$(losetup -j "$ZRAM_BACKING_FILE" 2>/dev/null | awk -F: 'NR==1 { print $1 }')
+    if [ -z "${loop_dev:-}" ]; then
+        loop_dev=$(losetup -f --show --direct-io=on "$ZRAM_BACKING_FILE" 2>/dev/null || losetup -f --show "$ZRAM_BACKING_FILE" 2>/dev/null || true)
+    fi
+    [ -n "${loop_dev:-}" ] || return 0
+
+    if ! echo "$loop_dev" > /sys/block/zram0/backing_dev 2>/dev/null; then
+        losetup -d "$loop_dev" 2>/dev/null || true
+        return 0
+    fi
+}
+
+setup_backing_dev || true
+
+if [ -w /sys/block/zram0/recomp_algorithm ] && grep -qw lz4 /sys/block/zram0/comp_algorithm 2>/dev/null && grep -qw zstd /sys/block/zram0/comp_algorithm 2>/dev/null; then
     echo lz4 > /sys/block/zram0/comp_algorithm
     echo "algo=zstd priority=1" > /sys/block/zram0/recomp_algorithm 2>/dev/null || true
 elif grep -qw zstd /sys/block/zram0/comp_algorithm 2>/dev/null; then

@@ -587,6 +587,64 @@ class TestUfsMemoryOomdAndSecurityCenter(unittest.TestCase):
                 self.assertEqual(recomp_writes, ['type=idle max_pages=4096', 'type=huge_idle max_pages=1024'])
                 self.assertEqual(compact_f.read_text(encoding='utf-8').strip(), '1')
 
+            # Writeback integration: backing_dev attached + mem_used_total above watermarks
+            zdir_wb = Path(td) / 'zram_wb'
+            zdir_wb.mkdir()
+            wb_mm = zdir_wb / 'mm_stat'
+            wb_idle = zdir_wb / 'idle'
+            wb_recomp = zdir_wb / 'recompress'
+            wb_compact = zdir_wb / 'compact'
+            wb_bdev = zdir_wb / 'backing_dev'
+            wb_file = zdir_wb / 'writeback'
+            wb_lim_en = zdir_wb / 'writeback_limit_enable'
+            wb_lim = zdir_wb / 'writeback_limit'
+            meminfo_f = Path(td) / 'meminfo'
+            meminfo_f.write_text('MemTotal:       10485760 kB\nMemAvailable:    5242880 kB\n', encoding='utf-8')
+            for p, v in (
+                (wb_idle, ''),
+                (wb_recomp, ''),
+                (wb_compact, ''),
+                (wb_bdev, '/dev/loop14\n'),
+                (wb_file, ''),
+                (wb_lim_en, '0\n'),
+                (wb_lim, '0\n'),
+            ):
+                p.write_text(v, encoding='utf-8')
+
+            wb_writes = []
+
+            def track_wb(path: Path, value: str) -> bool:
+                if path in (wb_file, wb_lim_en, wb_lim):
+                    wb_writes.append((path.name, value))
+                return orig_write(path, value)
+
+            with mock.patch.object(tg, 'write_sysfs', side_effect=track_wb):
+                zr_wb = tg.ZramRecompressor(
+                    zram_dir=zdir_wb,
+                    interval_sec=120.0,
+                    min_orig_bytes=8 * 1024 * 1024,
+                    meminfo_path=meminfo_f,
+                )
+                # mem_used_total = 2 GiB (> 15% of 10 GiB = 1.5 GiB) -> triggers both huge_idle and idle writeback
+                wb_mm.write_text(f'{4 * 1024**3} {2 * 1024**3} {2 * 1024**3} 0 {2 * 1024**3} 0 0 0 0\n', encoding='utf-8')
+                self.assertFalse(zr_wb.poll(100.0))
+                self.assertTrue(zr_wb.poll(230.0))
+                self.assertEqual(
+                    wb_writes,
+                    [
+                        ('writeback_limit_enable', '1'),
+                        ('writeback_limit', '8192'),
+                        ('writeback', 'huge_idle'),
+                        ('writeback', 'idle'),
+                        ('writeback_limit_enable', '0'),
+                    ],
+                )
+
+            zram_sh = (ROOT / 'packaging/device-support/tree/usr/local/libexec/tb378fc-zram').read_text(encoding='utf-8')
+            self.assertIn('/var/lib/tb378fc/zram-backing.img', zram_sh)
+            self.assertIn('/sys/block/zram0/backing_dev', zram_sh)
+            self.assertIn('--direct-io=on', zram_sh)
+
             # Fast tmpfs display-transform lookup without spawning --watch-display
             rdir = Path(td) / 'run-user-1000'
             rdir.mkdir()

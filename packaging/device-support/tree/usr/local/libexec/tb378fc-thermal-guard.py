@@ -473,16 +473,42 @@ POWER_KEY_SCRIPT = Path("/usr/local/libexec/tb378fc-power-key.py")
 VOLUME_ORIENT_SCRIPT = Path("/usr/local/libexec/tb378fc-volume-orientation")
 
 
-class ZramRecompressor:
-    """Periodic cold-page zram secondary (lz4 -> zstd) recompression & compaction.
+def read_meminfo_bytes(meminfo_path: Path = Path("/proc/meminfo")) -> tuple[int | None, int | None]:
+    """Return (MemTotal_bytes, MemAvailable_bytes) from /proc/meminfo."""
+    total_kb = None
+    avail_kb = None
+    try:
+        for line in meminfo_path.read_text(encoding="utf-8").splitlines():
+            if line.startswith("MemTotal:"):
+                parts = line.split()
+                if len(parts) >= 2 and parts[1].isdigit():
+                    total_kb = int(parts[1])
+            elif line.startswith("MemAvailable:"):
+                parts = line.split()
+                if len(parts) >= 2 and parts[1].isdigit():
+                    avail_kb = int(parts[1])
+    except OSError:
+        return (None, None)
+    return (
+        total_kb * 1024 if total_kb is not None else None,
+        avail_kb * 1024 if avail_kb is not None else None,
+    )
 
-    Uses Linux 7.4 CONFIG_ZRAM_MULTI_COMP sysfs interface without spawning
-    subprocesses:
+
+class ZramRecompressor:
+    """Periodic cold-page zram secondary (lz4 -> zstd) recompression, writeback & compaction.
+
+    Uses Linux 7.4 CONFIG_ZRAM_MULTI_COMP and CONFIG_ZRAM_WRITEBACK sysfs interfaces
+    without spawning subprocesses:
       1. Marks resident zram pages idle via /sys/block/zram0/idle ('all').
       2. On the next interval (120s later), any pages that remained untouched
          are recompressed to secondary zstd in bounded batches (max_pages=4096
-         for normal idle pages, max_pages=1024 for huge_idle pages), followed
-         by zsmalloc pool compaction (/sys/block/zram0/compact).
+         for normal idle pages, max_pages=1024 for huge_idle pages).
+      3. When a backing_dev is attached, writes back incompressible huge_idle
+         pages (when mem_used_total >= wb_huge_min_bytes) and cold idle pages
+         (when mem_used_total >= wb_idle_min_bytes or MemAvailable drops low)
+         under a bounded writeback_limit budget, followed by zsmalloc pool
+         compaction (/sys/block/zram0/compact).
     """
 
     def __init__(
@@ -490,12 +516,72 @@ class ZramRecompressor:
         zram_dir: Path = Path("/sys/block/zram0"),
         interval_sec: float = 120.0,
         min_orig_bytes: int = 8 * 1024 * 1024,
+        meminfo_path: Path = Path("/proc/meminfo"),
+        wb_huge_min_bytes: int = 128 * 1024 * 1024,
+        wb_idle_min_bytes: int | None = None,
+        wb_batch_pages: int = 8192,
     ):
         self.zram_dir = zram_dir
         self.interval_sec = interval_sec
         self.min_orig_bytes = min_orig_bytes
+        self.meminfo_path = meminfo_path
+        self.wb_huge_min_bytes = wb_huge_min_bytes
+        self.wb_idle_min_bytes = wb_idle_min_bytes
+        self.wb_batch_pages = wb_batch_pages
         self.last_check = 0.0
         self.idle_marked = False
+
+    def _has_backing_dev(self) -> bool:
+        bdev_path = self.zram_dir / "backing_dev"
+        writeback_path = self.zram_dir / "writeback"
+        if not (bdev_path.exists() and writeback_path.exists()):
+            return False
+        try:
+            val = bdev_path.read_text(encoding="utf-8").strip()
+        except OSError:
+            return False
+        return bool(val and val != "none")
+
+    def _run_writeback(self, mem_used_total: int) -> None:
+        if not self._has_backing_dev():
+            return
+        mem_total, mem_avail = read_meminfo_bytes(self.meminfo_path)
+        idle_thresh = self.wb_idle_min_bytes
+        if idle_thresh is None:
+            if mem_total is not None:
+                idle_thresh = max(512 * 1024 * 1024, (mem_total * 15) // 100)
+            else:
+                idle_thresh = 1024 * 1024 * 1024
+
+        low_avail = (
+            mem_total is not None
+            and mem_avail is not None
+            and mem_avail < (mem_total * 25) // 100
+        )
+        want_huge = mem_used_total >= self.wb_huge_min_bytes
+        want_idle = mem_used_total >= idle_thresh or low_avail
+        if not (want_huge or want_idle):
+            return
+
+        batch_pages = self.wb_batch_pages
+        if mem_used_total >= idle_thresh * 2 or low_avail:
+            batch_pages = self.wb_batch_pages * 2
+
+        wb_path = self.zram_dir / "writeback"
+        wb_limit_en = self.zram_dir / "writeback_limit_enable"
+        wb_limit = self.zram_dir / "writeback_limit"
+        has_limit = wb_limit_en.exists() and wb_limit.exists()
+        if has_limit:
+            write_sysfs(wb_limit_en, "1")
+            write_sysfs(wb_limit, str(batch_pages))
+        try:
+            if want_huge:
+                write_sysfs(wb_path, "huge_idle")
+            if want_idle:
+                write_sysfs(wb_path, "idle")
+        finally:
+            if has_limit:
+                write_sysfs(wb_limit_en, "0")
 
     def poll(self, now_mono: float | None = None) -> bool:
         if now_mono is None:
@@ -514,6 +600,7 @@ class ZramRecompressor:
         try:
             fields = mm_stat.read_text(encoding="utf-8").split()
             orig_bytes = int(fields[0]) if fields else 0
+            mem_used_total = int(fields[2]) if len(fields) >= 3 else orig_bytes
         except (OSError, ValueError):
             return False
 
@@ -525,6 +612,7 @@ class ZramRecompressor:
         if self.idle_marked:
             write_sysfs(recomp_path, "type=idle max_pages=4096")
             write_sysfs(recomp_path, "type=huge_idle max_pages=1024")
+            self._run_writeback(mem_used_total)
             if compact_path.exists():
                 write_sysfs(compact_path, "1")
             did_recomp = True
