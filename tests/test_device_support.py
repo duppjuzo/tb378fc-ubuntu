@@ -298,6 +298,8 @@ class TestUfsMemoryOomdAndSecurityCenter(unittest.TestCase):
         self.assertIn('ManagedOOMMemoryPressureLimit=40%', bg_s)
         sess_s = (ROOT / 'packaging/device-support/tree/usr/lib/systemd/user/session.slice.d/50-tb378fc-sched.conf').read_text(encoding='utf-8')
         self.assertIn('ManagedOOMPreference=omit', sess_s)
+        shell_oom = (ROOT / 'packaging/device-support/tree/etc/systemd/user/org.gnome.Shell@.service.d/91-tb378fc-oom.conf').read_text(encoding='utf-8')
+        self.assertIn('OOMPolicy=continue', shell_oom)
 
     def test_security_center_and_snap_store_mesa2404_wrappers(self):
         for app in ('desktop-security-center', 'snap-store'):
